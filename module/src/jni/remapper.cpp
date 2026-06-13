@@ -107,7 +107,7 @@ void remap_lib(std::string lib_path) {
             LOGE("Failed to mremap: %s", strerror(errno));
         }
 
-        LOGI("Allocated and remapped at address %p with size of %zu", info.start, size);
+        LOGI("Allocated and remapped at address %p with size of %zu", reinterpret_cast<void *>(info.start), size);
     }
 
     LOGI("Remapped");
