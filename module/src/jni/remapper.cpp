@@ -16,8 +16,8 @@ struct PROCMAPSINFO {
     uintptr_t start, end, offset;
     uint8_t perms;
     ino_t inode;
-    char* dev;
-    char* path;
+    std::string dev;
+    std::string path;
 };
 
 
@@ -40,6 +40,11 @@ std::vector<PROCMAPSINFO> get_modules_by_name(std::string mName) {
             char path[255];
             char dev[25];
 
+            // Initialize buffers to avoid reading garbage if sscanf fails to match them
+            perms[0] = '\0';
+            path[0] = '\0';
+            dev[0] = '\0';
+
             sscanf(
                 buffer,
                 "%" SCNxPTR "-%" SCNxPTR " %s %" SCNxPTR " %s %ld %s",
@@ -49,10 +54,9 @@ std::vector<PROCMAPSINFO> get_modules_by_name(std::string mName) {
             if (strchr(perms, 'r')) info.perms |= PROT_READ;
             if (strchr(perms, 'w')) info.perms |= PROT_WRITE;
             if (strchr(perms, 'x')) info.perms |= PROT_EXEC;
-            if (strchr(perms, 'r')) info.perms |= PROT_READ;
 
-            info.dev = dev;
-            info.path = path;
+            info.dev = std::string(dev);
+            info.path = std::string(path);
 
             maps.push_back(info);
         }
@@ -85,7 +89,7 @@ void remap_lib(std::string lib_path) {
         }
 
         if ((info.perms & PROT_READ) == 0) {
-            LOGI("Removing memory protection: %s", info.path);
+            LOGI("Removing memory protection: %s", info.path.c_str());
             mprotect(address, size, PROT_READ);
         }
 
