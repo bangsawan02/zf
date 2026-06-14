@@ -104,7 +104,7 @@ static void inject_libs(target_config const &cfg) {
     }
 }
 
-bool check_and_inject(std::string const &app_name) {
+bool check_and_inject(std::string const &app_name, std::string const &app_data_dir) {
     std::string module_dir = std::string("/data/local/tmp/re.zyg.fri");
 
     std::optional<target_config> cfg = load_config(module_dir, app_name);
@@ -120,6 +120,25 @@ bool check_and_inject(std::string const &app_name) {
     if (!target_config.enabled) {
         LOGI("Injection disabled for %s", app_name.c_str());
         return false;
+    }
+
+    // Translate any paths targeted to /data/local/tmp/re.zyg.fri to the specialized localized app_data_dir
+    for (auto &lib_path : target_config.injected_libraries) {
+        if (lib_path.rfind("/data/local/tmp/re.zyg.fri/", 0) == 0) {
+            size_t last_slash = lib_path.find_last_of('/');
+            std::string filename = (last_slash == std::string::npos) ? lib_path : lib_path.substr(last_slash + 1);
+            lib_path = app_data_dir + "/" + filename;
+        }
+    }
+
+    if (target_config.child_gating.enabled) {
+        for (auto &lib_path : target_config.child_gating.injected_libraries) {
+            if (lib_path.rfind("/data/local/tmp/re.zyg.fri/", 0) == 0) {
+                size_t last_slash = lib_path.find_last_of('/');
+                std::string filename = (last_slash == std::string::npos) ? lib_path : lib_path.substr(last_slash + 1);
+                lib_path = app_data_dir + "/" + filename;
+            }
+        }
     }
 
     std::thread inject_thread(inject_libs, target_config);
