@@ -1,4 +1,4 @@
-APP_ABI      := arm64-v8a armeabi-v7a
+APP_ABI      := arm64-v8a
 APP_CPPFLAGS := -std=c++17 -fno-exceptions -fno-rtti -fvisibility=hidden -fvisibility-inlines-hidden -Os -flto
 APP_LDFLAGS  := -Wl,--gc-sections -flto
 APP_STL      := none

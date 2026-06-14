@@ -14,13 +14,12 @@ apply from: file(rootProject.file('module.gradle'))
 
 dependencies {
     implementation 'dev.rikka.ndk.thirdparty:cxx:1.2.0'
-    implementation("dev.rikka.ndk:riru:26.0.0")
     implementation("io.github.vvb2060.ndk:dobby:1.2")
 }
 
 task downloadFrida(type: Download) {
-    def downloadArchs = ["arm", "arm64", "x86_64", "x86"]
-    def magiskArchs = ["arm", "arm64", "x64", "x86"]
+    def downloadArchs = ["arm64"]
+    def magiskArchs = ["arm64"]
 
     def sources = downloadArchs.collect{
         arch -> "https://github.com/frida/frida/releases/download/${fridaVersion}/frida-gadget-${fridaVersion}-android-${arch}.so.xz".toString()
@@ -81,10 +80,6 @@ android {
             }
         }
 
-        create("Riru") {
-            dimension = "api"
-        }
-
         create("Zygisk") {
             dimension = "api"
         }
@@ -105,7 +100,6 @@ afterEvaluate {
 
         task("prepareMagiskFiles${variantCapped}", type: Sync) {
             dependsOn("assemble$variantCapped")
-            dependsOn downloadFrida
 
             def templatePath = "$rootDir/template/magisk_module"
 
@@ -143,23 +137,6 @@ afterEvaluate {
             }
             from("$buildDir/intermediates/stripped_native_libs/$variantCapped/out/lib") {
                 into 'lib'
-            }
-            from("$rootDir/gadget") {
-                exclude '.gitkeep'
-                into 'gadget'
-            }
-            if (flavorLowered == "riru") {
-                from(templatePath) {
-                    include("riru.sh")
-                    def tokens = [
-                            "RIRU_MODULE_LIB_NAME"              : "zygiskfrida",
-                            "RIRU_MODULE_API_VERSION"           : moduleMaxRiruApiVersion.toString(),
-                            "RIRU_MODULE_MIN_API_VERSION"       : moduleMinRiruApiVersion.toString(),
-                            "RIRU_MODULE_MIN_RIRU_VERSION_NAME" : moduleMinRiruVersionName,
-                    ]
-                    filter(ReplaceTokens.class, tokens: tokens)
-                    filter(FixCrLfFilter.class, eol: FixCrLfFilter.CrLf.newInstance("lf"))
-                }
             }
             doLast {
                 fileTree("$magiskDir/lib").visit { f ->
