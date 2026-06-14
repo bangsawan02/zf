@@ -112,6 +112,7 @@ afterEvaluate {
                 exclude 'riru.sh'
                 exclude 'customize.sh'
                 exclude 'verify.sh'
+                exclude 'post-fs-data.sh'
             }
             from(templatePath) {
                 include 'module.prop'
