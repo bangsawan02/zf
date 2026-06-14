@@ -83,6 +83,36 @@ static bool copy_file_at(int src_dir_fd, const char* src_rel_path, const std::st
     return success;
 }
 
+static bool copy_config_and_rewrite(const std::string& src, const std::string& dst, const std::string& app_data_dir) {
+    int src_fd = open(src.c_str(), O_RDONLY);
+    if (src_fd < 0) return false;
+    
+    std::string content;
+    char buffer[4096];
+    ssize_t bytes_read;
+    while ((bytes_read = read(src_fd, buffer, sizeof(buffer))) > 0) {
+        content.append(buffer, bytes_read);
+    }
+    close(src_fd);
+
+    // Replace "/data/local/tmp/re.zyg.fri/" with app_data_dir + "/"
+    std::string pattern = "/data/local/tmp/re.zyg.fri/";
+    std::string replacement = app_data_dir + "/";
+    size_t pos = 0;
+    while ((pos = content.find(pattern, pos)) != std::string::npos) {
+        content.replace(pos, pattern.length(), replacement);
+        pos += replacement.length();
+    }
+
+    int dst_fd = open(dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (dst_fd < 0) return false;
+
+    ssize_t written = write(dst_fd, content.data(), content.size());
+    close(dst_fd);
+
+    return (written == static_cast<ssize_t>(content.size()));
+}
+
 static void localize_single_lib(const std::string& lib_path, const std::string& app_data_dir, int uid, int gid) {
     if (lib_path.rfind("/data/local/tmp/re.zyg.fri/", 0) == 0) {
         size_t last_slash = lib_path.find_last_of('/');
@@ -103,16 +133,19 @@ static void localize_single_lib(const std::string& lib_path, const std::string& 
                     std::string config_dst = app_data_dir + "/" + config_filename;
 
                     if (stat(config_src.c_str(), &st) == 0) {
-                        if (copy_file(config_src, config_dst)) {
+                        if (copy_config_and_rewrite(config_src, config_dst, app_data_dir)) {
                             chown(config_dst.c_str(), uid, gid);
                             chmod(config_dst.c_str(), 0644);
+                            LOGI("Copied and successfully rewrote config: %s -> %s", config_src.c_str(), config_dst.c_str());
+                        } else {
+                            LOGE("Failed to copy/rewrite config %s to %s", config_src.c_str(), config_dst.c_str());
                         }
                     } else {
                         // Create a default config that resumes the app immediately so it doesn't wait
                         int config_fd = open(config_dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
                         if (config_fd >= 0) {
-                            const char* default_config = "{\n  \"interaction\": {\n    \"type\": \"script\",\n    \"path\": \"/data/local/tmp/re.zyg.fri/script.js\"\n  }\n}";
-                            write(config_fd, default_config, strlen(default_config));
+                            std::string default_config = "{\n  \"interaction\": {\n    \"type\": \"script\",\n    \"path\": \"" + app_data_dir + "/script.js\"\n  }\n}";
+                            write(config_fd, default_config.c_str(), default_config.length());
                             close(config_fd);
                             chown(config_dst.c_str(), uid, gid);
                             LOGI("Created default script config at %s", config_dst.c_str());
@@ -136,6 +169,8 @@ class MyModule : public zygisk::ModuleBase {
     }
 
     void preAppSpecialize(AppSpecializeArgs *args) override {
+        if (!args->nice_name || !args->app_data_dir) return;
+
         const char *raw_app_name = env->GetStringUTFChars(args->nice_name, nullptr);
         if (!raw_app_name) return;
         std::string app_name(raw_app_name);
@@ -181,6 +216,20 @@ class MyModule : public zygisk::ModuleBase {
             int uid = args->uid;
             int gid = args->gid;
 
+            // 4. Ensure script.js is copied/localized to app_data_dir for Frida script interaction
+            std::string script_src = module_dir + "/script.js";
+            std::string script_dst = app_data_dir + "/script.js";
+            struct stat script_st;
+            if (stat(script_src.c_str(), &script_st) == 0) {
+                if (copy_file(script_src, script_dst)) {
+                    chown(script_dst.c_str(), uid, gid);
+                    chmod(script_dst.c_str(), 0644);
+                    LOGI("Localized script.js copied: %s -> %s (UID: %d, GID: %d)", script_src.c_str(), script_dst.c_str(), uid, gid);
+                } else {
+                    LOGE("Failed to copy script.js to app cache");
+                }
+            }
+
             for (auto const &lib_path : cfg->injected_libraries) {
                 localize_single_lib(lib_path, app_data_dir, uid, gid);
             }
@@ -194,11 +243,24 @@ class MyModule : public zygisk::ModuleBase {
     }
 
     void postAppSpecialize(const AppSpecializeArgs *args) override {
+        if (!args->nice_name || !args->app_data_dir) {
+            this->api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
+            return;
+        }
+
         const char *raw_app_name = env->GetStringUTFChars(args->nice_name, nullptr);
+        if (!raw_app_name) {
+            this->api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
+            return;
+        }
         std::string app_name = std::string(raw_app_name);
         this->env->ReleaseStringUTFChars(args->nice_name, raw_app_name);
 
         const char *raw_app_data_dir = env->GetStringUTFChars(args->app_data_dir, nullptr);
+        if (!raw_app_data_dir) {
+            this->api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
+            return;
+        }
         std::string app_data_dir = std::string(raw_app_data_dir);
         this->env->ReleaseStringUTFChars(args->app_data_dir, raw_app_data_dir);
 

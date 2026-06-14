@@ -71,7 +71,8 @@ void inject_lib(std::string const &lib_path, std::string const &logContext) {
         return;
     }
 
-    auto xdl_err = dlerror();
+    const char *xdl_err = dlerror();
+    const char *xdl_error_msg = xdl_err ? xdl_err : "No direct system link error registered";
 
     handle = dlopen(lib_path.c_str(), RTLD_NOW);
     if (handle) {
@@ -79,10 +80,11 @@ void inject_lib(std::string const &lib_path, std::string const &logContext) {
         return;
     }
 
-    auto dl_err = dlerror();
+    const char *dl_err = dlerror();
+    const char *dl_error_msg = dl_err ? dl_err : "No standard linking error registered";
 
-    LOGE("%sFailed to inject %s (xdl_open): %s", logContext.c_str(), lib_path.c_str(), xdl_err);
-    LOGE("%sFailed to inject %s (dlopen): %s", logContext.c_str(), lib_path.c_str(), dl_err);
+    LOGE("%sFailed to inject %s (xdl_open): %s", logContext.c_str(), lib_path.c_str(), xdl_error_msg);
+    LOGE("%sFailed to inject %s (dlopen): %s", logContext.c_str(), lib_path.c_str(), dl_error_msg);
 }
 
 static void inject_libs(target_config const &cfg) {
