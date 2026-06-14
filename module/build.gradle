@@ -113,6 +113,8 @@ afterEvaluate {
                 exclude 'customize.sh'
                 exclude 'verify.sh'
                 exclude 'post-fs-data.sh'
+                exclude 'libgadget.config.so'
+                exclude 'script.js'
             }
             from(templatePath) {
                 include 'module.prop'
@@ -130,6 +132,8 @@ afterEvaluate {
                 include("customize.sh")
                 include("verify.sh")
                 include("post-fs-data.sh")
+                include("libgadget.config.so")
+                include("script.js")
                 def tokens = [
                         "FLAVOR" : flavorLowered,
                         "MODULE_ID": magiskModuleId,

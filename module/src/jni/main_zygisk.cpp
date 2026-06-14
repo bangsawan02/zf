@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <cerrno>
 
 #include "inject.h"
 #include "log.h"
@@ -110,11 +111,11 @@ static void localize_single_lib(const std::string& lib_path, const std::string& 
                         // Create a default config that resumes the app immediately so it doesn't wait
                         int config_fd = open(config_dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
                         if (config_fd >= 0) {
-                            const char* default_config = "{\n  \"interaction\": {\n    \"type\": \"listen\",\n    \"on_port_conflict\": \"pick-next\",\n    \"on_load\": \"resume\"\n  }\n}";
+                            const char* default_config = "{\n  \"interaction\": {\n    \"type\": \"script\",\n    \"path\": \"/data/local/tmp/re.zyg.fri/script.js\"\n  }\n}";
                             write(config_fd, default_config, strlen(default_config));
                             close(config_fd);
                             chown(config_dst.c_str(), uid, gid);
-                            LOGI("Created default resume config at %s", config_dst.c_str());
+                            LOGI("Created default script config at %s", config_dst.c_str());
                         }
                     }
                 }
@@ -149,24 +150,24 @@ class MyModule : public zygisk::ModuleBase {
 
         // 1. Ensure /data/local/tmp/re.zyg.fri directory exists (creates dynamic self-healing of missing directory)
         struct stat st;
-        if (stat(module_dir.c_str(), &st) != 0) {
+        if (stat(module_dir.c_str(), &st) != 0 && errno == ENOENT) {
             if (mkdir(module_dir.c_str(), 0777) == 0) {
                 chmod(module_dir.c_str(), 0777);
                 chown(module_dir.c_str(), 2000, 2000); // shell:shell
                 LOGI("Successfully created config directory at runtime: %s", module_dir.c_str());
-            } else {
+            } else if (errno != EEXIST) {
                 LOGE("Failed to create config directory: %s", module_dir.c_str());
             }
         }
 
         // 2. Ensure config.json.example exists
         std::string example_config_path = module_dir + "/config.json.example";
-        if (stat(example_config_path.c_str(), &st) != 0) {
+        if (stat(example_config_path.c_str(), &st) != 0 && errno == ENOENT) {
             int module_dir_fd = api->getModuleDir();
             if (module_dir_fd >= 0) {
                 if (copy_file_at(module_dir_fd, "config.json.example", example_config_path, 2000, 2000)) {
                     LOGI("Successfully copied config.json.example dynamically to %s", example_config_path.c_str());
-                } else {
+                } else if (errno != EEXIST && errno != EACCES) {
                     LOGE("Failed to copy config.json.example from module dir (fd: %d) to %s", module_dir_fd, example_config_path.c_str());
                 }
             } else {

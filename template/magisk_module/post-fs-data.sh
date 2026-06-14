@@ -9,6 +9,12 @@ if [ ! -d "$TMP_MODULE_DIR" ]; then
     if [ -f "$MODDIR/config.json.example" ]; then
         cp "$MODDIR/config.json.example" "$TMP_MODULE_DIR/config.json.example"
     fi
+    if [ -f "$MODDIR/libgadget.config.so" ]; then
+        cp "$MODDIR/libgadget.config.so" "$TMP_MODULE_DIR/libgadget.config.so"
+    fi
+    if [ -f "$MODDIR/script.js" ]; then
+        cp "$MODDIR/script.js" "$TMP_MODULE_DIR/script.js"
+    fi
 fi
 
 if [ -d "$TMP_MODULE_DIR" ]; then

@@ -61,6 +61,12 @@ ui_print "- Extracting config.json.example"
 extract "$ZIPFILE" "config.json.example" "$TMP_MODULE_DIR" true
 extract "$ZIPFILE" "config.json.example" "$MODPATH"      true
 
+ui_print "- Extracting libgadget.config.so & script.js"
+extract "$ZIPFILE" "libgadget.config.so" "$TMP_MODULE_DIR" true
+extract "$ZIPFILE" "script.js" "$TMP_MODULE_DIR" true
+extract "$ZIPFILE" "libgadget.config.so" "$MODPATH"      true
+extract "$ZIPFILE" "script.js" "$MODPATH"      true
+
 ui_print "- Adjusting directory permissions to 0777 (shell:shell)"
 set_perm_recursive "$TMP_MODULE_DIR" 2000 2000 0777 0777
 set_perm_recursive "$MODPATH" 0 0 0755 0644
