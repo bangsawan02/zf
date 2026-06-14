@@ -16,44 +16,23 @@
 #include "log.h"
 #include "child_gating.h"
 #include "xdl.h"
-#include "remapper.h"
-
-#include <cstring>
 
 static std::string get_process_name() {
-    // Standard fast Bionic libc function, SELinux immune
-    const char *progname = getprogname();
-    if (progname && std::strlen(progname) > 0) {
-        return std::string(progname);
-    }
-
     auto path = "/proc/self/cmdline";
+
     std::ifstream file(path);
-    if (!file.is_open()) {
-        return "";
-    }
     std::stringstream buffer;
+
     buffer << file.rdbuf();
-    std::string name = buffer.str();
-    size_t null_pos = name.find('\0');
-    if (null_pos != std::string::npos) {
-        name = name.substr(0, null_pos);
-    }
-    return name;
+    return buffer.str();
 }
 
 static void wait_for_init(std::string const &app_name) {
-    LOGI("Wait for process to complete init (Target: %s)", app_name.c_str());
+    LOGI("Wait for process to complete init");
 
-    // wait until the process is renamed to the package name with 10s maximum timeout to prevent freeze
-    int attempts = 0;
+    // wait until the process is renamed to the package name
     while (get_process_name().find(app_name) == std::string::npos) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        attempts++;
-        if (attempts > 1000) {
-            LOGE("Timeout waiting for process rename! Current process name: %s. Proceeding anyway...", get_process_name().c_str());
-            break;
-        }
     }
 
     // additional tolerance for the init to complete after process rename
@@ -89,7 +68,6 @@ void inject_lib(std::string const &lib_path, std::string const &logContext) {
     auto *handle = xdl_open(lib_path.c_str(), XDL_TRY_FORCE_LOAD);
     if (handle) {
         LOGI("%sInjected %s with handle %p", logContext.c_str(), lib_path.c_str(), handle);
-        remap_lib(lib_path);
         return;
     }
 
@@ -98,7 +76,6 @@ void inject_lib(std::string const &lib_path, std::string const &logContext) {
     handle = dlopen(lib_path.c_str(), RTLD_NOW);
     if (handle) {
         LOGI("%sInjected %s with handle %p (dlopen)", logContext.c_str(), lib_path.c_str(), handle);
-        remap_lib(lib_path);
         return;
     }
 
@@ -108,7 +85,7 @@ void inject_lib(std::string const &lib_path, std::string const &logContext) {
     LOGE("%sFailed to inject %s (dlopen): %s", logContext.c_str(), lib_path.c_str(), dl_err);
 }
 
-static void inject_libs(target_config cfg) {
+static void inject_libs(target_config const &cfg) {
     // We need to wait for process initialization to complete.
     // Loading the gadget before that will freeze the process
     // before the init has completed. This make the process
