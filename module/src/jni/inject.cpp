@@ -127,7 +127,10 @@ bool check_and_inject(std::string const &app_name, std::string const &app_data_d
         if (lib_path.rfind("/data/local/tmp/re.zyg.fri/", 0) == 0) {
             size_t last_slash = lib_path.find_last_of('/');
             std::string filename = (last_slash == std::string::npos) ? lib_path : lib_path.substr(last_slash + 1);
-            lib_path = app_data_dir + "/" + filename;
+            std::string localized_path = app_data_dir + "/" + filename;
+            if (access(localized_path.c_str(), F_OK) == 0) {
+                lib_path = localized_path;
+            }
         }
     }
 
@@ -136,7 +139,10 @@ bool check_and_inject(std::string const &app_name, std::string const &app_data_d
             if (lib_path.rfind("/data/local/tmp/re.zyg.fri/", 0) == 0) {
                 size_t last_slash = lib_path.find_last_of('/');
                 std::string filename = (last_slash == std::string::npos) ? lib_path : lib_path.substr(last_slash + 1);
-                lib_path = app_data_dir + "/" + filename;
+                std::string localized_path = app_data_dir + "/" + filename;
+                if (access(localized_path.c_str(), F_OK) == 0) {
+                    lib_path = localized_path;
+                }
             }
         }
     }

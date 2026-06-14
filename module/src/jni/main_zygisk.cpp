@@ -94,6 +94,30 @@ static void localize_single_lib(const std::string& lib_path, const std::string& 
                 chown(localized_path.c_str(), uid, gid);
                 chmod(localized_path.c_str(), 0755);
                 LOGI("Localized library copied: %s -> %s (UID: %d, GID: %d)", lib_path.c_str(), localized_path.c_str(), uid, gid);
+
+                // Auto-provision a gadget configuration with "on_load": "resume" if it doesn't exist
+                if (lib_path.length() >= 3 && lib_path.substr(lib_path.length() - 3) == ".so") {
+                    std::string config_src = lib_path.substr(0, lib_path.length() - 3) + ".config.so";
+                    std::string config_filename = filename.substr(0, filename.length() - 3) + ".config.so";
+                    std::string config_dst = app_data_dir + "/" + config_filename;
+
+                    if (stat(config_src.c_str(), &st) == 0) {
+                        if (copy_file(config_src, config_dst)) {
+                            chown(config_dst.c_str(), uid, gid);
+                            chmod(config_dst.c_str(), 0644);
+                        }
+                    } else {
+                        // Create a default config that resumes the app immediately so it doesn't wait
+                        int config_fd = open(config_dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                        if (config_fd >= 0) {
+                            const char* default_config = "{\n  \"interaction\": {\n    \"type\": \"listen\",\n    \"on_port_conflict\": \"pick-next\",\n    \"on_load\": \"resume\"\n  }\n}";
+                            write(config_fd, default_config, strlen(default_config));
+                            close(config_fd);
+                            chown(config_dst.c_str(), uid, gid);
+                            LOGI("Created default resume config at %s", config_dst.c_str());
+                        }
+                    }
+                }
             } else {
                 LOGE("Failed to copy library to app cache: %s -> %s", lib_path.c_str(), localized_path.c_str());
             }
