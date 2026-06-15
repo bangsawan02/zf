@@ -121,11 +121,14 @@ static void localize_single_lib(const std::string& lib_path, const std::string& 
         
         // Use a dedicated subdirectory in app's cache for our localized files
         std::string localized_dir = app_data_dir + "/.zygisk_frida";
+        LOGI("Localizing %s to %s", lib_path.c_str(), localized_dir.c_str());
         if (mkdir(localized_dir.c_str(), 0755) != 0 && errno != EEXIST) {
             LOGE("Failed to create localized directory %s: %s", localized_dir.c_str(), strerror(errno));
+        } else {
+            LOGI("Localized directory ready: %s", localized_dir.c_str());
         }
         if (chown(localized_dir.c_str(), uid, gid) != 0) {
-            LOGW("Failed to chown localized directory %s: %s", localized_dir.c_str(), strerror(errno));
+            LOGW("Failed to chown localized directory %s to %d:%d: %s", localized_dir.c_str(), uid, gid, strerror(errno));
         }
         
         std::string localized_path = localized_dir + "/" + filename;
@@ -137,29 +140,55 @@ static void localize_single_lib(const std::string& lib_path, const std::string& 
                 chmod(localized_path.c_str(), 0755);
                 LOGI("Localized library successfully copied: %s -> %s (UID: %d, GID: %d)", lib_path.c_str(), localized_path.c_str(), uid, gid);
 
-                // Auto-provision a gadget configuration with "on_load": "resume" if it doesn't exist
+                // Auto-provision a gadget configuration
                 if (lib_path.length() >= 3 && lib_path.substr(lib_path.length() - 3) == ".so") {
-                    std::string config_src = lib_path.substr(0, lib_path.length() - 3) + ".config.so";
-                    std::string config_filename = filename.substr(0, filename.length() - 3) + ".config.so";
-                    std::string config_dst = localized_dir + "/" + config_filename;
+                    std::string base_name = filename.substr(0, filename.length() - 3);
+                    std::string base_path = localized_dir + "/" + base_name;
+                    
+                    // We support multiple naming conventions for Frida Gadget configs
+                    std::vector<std::string> config_dests = {
+                        base_path + ".config.so",
+                        base_path + ".so.config",
+                        localized_dir + "/gadget.config"
+                    };
 
-                    if (stat(config_src.c_str(), &st) == 0) {
-                        if (copy_config_and_rewrite(config_src, config_dst, localized_dir)) {
-                            chown(config_dst.c_str(), uid, gid);
-                            chmod(config_dst.c_str(), 0644);
-                            LOGI("Copied and successfully rewrote config: %s -> %s", config_src.c_str(), config_dst.c_str());
-                        } else {
-                            LOGE("Failed to copy/rewrite config %s to %s", config_src.c_str(), config_dst.c_str());
+                    std::string config_src = lib_path.substr(0, lib_path.length() - 3) + ".config.so";
+                    bool config_provided = (stat(config_src.c_str(), &st) == 0);
+                    
+                    if (!config_provided) {
+                        // try .so.config at source
+                        config_src = lib_path + ".config";
+                        config_provided = (stat(config_src.c_str(), &st) == 0);
+                    }
+
+                    if (config_provided) {
+                        for (const auto& config_dst : config_dests) {
+                            if (copy_config_and_rewrite(config_src, config_dst, localized_dir)) {
+                                chown(config_dst.c_str(), uid, gid);
+                                chmod(config_dst.c_str(), 0644);
+                                LOGI("Provisoned config: %s -> %s", config_src.c_str(), config_dst.c_str());
+                            }
                         }
                     } else {
-                        // Create a default config that resumes the app immediately so it doesn't wait
-                        int config_fd = open(config_dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                        if (config_fd >= 0) {
-                            std::string default_config = "{\n  \"interaction\": {\n    \"type\": \"script\",\n    \"path\": \"" + localized_dir + "/script.js\"\n  }\n}";
-                            write(config_fd, default_config.c_str(), default_config.length());
-                            close(config_fd);
-                            chown(config_dst.c_str(), uid, gid);
-                            LOGI("Created default script config at %s", config_dst.c_str());
+                        // Create default configs pointing to localized script
+                        std::string default_config = "{\n"
+                                                     "  \"interaction\": {\n"
+                                                     "    \"type\": \"script\",\n"
+                                                     "    \"path\": \"" + localized_dir + "/script.js\"\n"
+                                                     "  },\n"
+                                                     "  \"logging\": {\n"
+                                                     "    \"level\": \"info\",\n"
+                                                     "    \"type\": \"logcat\"\n"
+                                                     "  }\n"
+                                                     "}";
+                        for (const auto& config_dst : config_dests) {
+                            int config_fd = open(config_dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                            if (config_fd >= 0) {
+                                write(config_fd, default_config.c_str(), default_config.length());
+                                close(config_fd);
+                                chown(config_dst.c_str(), uid, gid);
+                                LOGI("Created default config at %s", config_dst.c_str());
+                            }
                         }
                     }
                 }
@@ -180,20 +209,32 @@ class MyModule : public zygisk::ModuleBase {
     }
 
     void preAppSpecialize(AppSpecializeArgs *args) override {
-        if (!args->nice_name || !args->app_data_dir) return;
+        if (!args->nice_name || !args->app_data_dir) {
+            LOGW("preAppSpecialize: nice_name or app_data_dir is null, skipping localization check");
+            return;
+        }
+
+        // Use the env provided in the args for the current thread/process context
+        JNIEnv *env = args->env ? args->env : this->env;
+        if (!env) {
+            LOGE("preAppSpecialize: JNIEnv is null, cannot proceed");
+            return;
+        }
 
         const char *raw_app_name = env->GetStringUTFChars(args->nice_name, nullptr);
         if (!raw_app_name) return;
         this->app_name = std::string(raw_app_name);
-        this->env->ReleaseStringUTFChars(args->nice_name, raw_app_name);
+        env->ReleaseStringUTFChars(args->nice_name, raw_app_name);
 
         const char *raw_app_data_dir = env->GetStringUTFChars(args->app_data_dir, nullptr);
         if (!raw_app_data_dir) return;
         this->app_data_dir = std::string(raw_app_data_dir);
-        this->env->ReleaseStringUTFChars(args->app_data_dir, raw_app_data_dir);
+        env->ReleaseStringUTFChars(args->app_data_dir, raw_app_data_dir);
 
         std::string app_name = this->app_name;
         std::string app_data_dir = this->app_data_dir;
+
+        LOGI("preAppSpecialize for %s (UID: %d, Data Dir: %s)", app_name.c_str(), args->uid, app_data_dir.c_str());
 
         std::string module_dir = std::string("/data/local/tmp/re.zyg.fri");
 
@@ -209,19 +250,24 @@ class MyModule : public zygisk::ModuleBase {
             }
         }
 
-        // 2. Ensure config.json.example exists
-        std::string example_config_path = module_dir + "/config.json.example";
-        if (stat(example_config_path.c_str(), &st) != 0 && errno == ENOENT) {
-            int module_dir_fd = api->getModuleDir();
-            if (module_dir_fd >= 0) {
+        // 2. Ensure config.json.example and script.js exist in /data/local/tmp
+        int module_dir_fd = api->getModuleDir();
+        if (module_dir_fd >= 0) {
+            std::string example_config_path = module_dir + "/config.json.example";
+            if (stat(example_config_path.c_str(), &st) != 0 && errno == ENOENT) {
                 if (copy_file_at(module_dir_fd, "config.json.example", example_config_path, 2000, 2000)) {
                     LOGI("Successfully copied config.json.example dynamically to %s", example_config_path.c_str());
-                } else if (errno != EEXIST && errno != EACCES) {
-                    LOGE("Failed to copy config.json.example from module dir (fd: %d) to %s", module_dir_fd, example_config_path.c_str());
                 }
-            } else {
-                LOGE("Could not obtain module directory fd to copy config.json.example");
             }
+            
+            std::string script_template_path = module_dir + "/script.js";
+            if (stat(script_template_path.c_str(), &st) != 0 && errno == ENOENT) {
+                if (copy_file_at(module_dir_fd, "script.js", script_template_path, 2000, 2000)) {
+                    LOGI("Successfully copied script.js template dynamically to %s", script_template_path.c_str());
+                }
+            }
+        } else {
+            LOGE("Could not obtain module directory fd to copy templates");
         }
 
         // 3. Localize libraries designed for injection to the target application's directory

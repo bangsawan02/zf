@@ -144,6 +144,14 @@ static std::vector<std::string> parse_injected_libraries(std::string const &modu
 
     std::string libpath;
     while (getline(config_file, libpath)) {
+        // Remove \r if present (Windows line endings)
+        if (!libpath.empty() && libpath.back() == '\r') {
+            libpath.pop_back();
+        }
+        // Trim leading/trailing whitespace
+        libpath.erase(0, libpath.find_first_not_of(" \t\n\r"));
+        libpath.erase(libpath.find_last_not_of(" \t\n\r") + 1);
+
         if (!libpath.empty()) {
             injected_libraries.push_back(libpath);
         }

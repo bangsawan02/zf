@@ -132,26 +132,33 @@ bool check_and_inject(std::string const &app_name, std::string const &app_data_d
     std::string localized_dir = app_data_dir + "/.zygisk_frida";
 
     // Translate any paths targeted to /data/local/tmp/re.zyg.fri to the specialized localized subdirectory
+    LOGI("Processing %zu libraries for possible localization", target_config.injected_libraries.size());
     for (auto &lib_path : target_config.injected_libraries) {
-        if (lib_path.rfind("/data/local/tmp/re.zyg.fri/", 0) == 0) {
+        LOGI("Evaluating library for localization: %s", lib_path.c_str());
+        if (lib_path.rfind("/data/local/tmp/re.zyg.fri", 0) == 0) {
             size_t last_slash = lib_path.find_last_of('/');
             std::string filename = (last_slash == std::string::npos) ? lib_path : lib_path.substr(last_slash + 1);
             
             // Check in the localized subdirectory first
             std::string localized_path = localized_dir + "/" + filename;
+            LOGI("Found match for /data/local/tmp/re.zyg.fri. Checking localized candidate: %s", localized_path.c_str());
             if (access(localized_path.c_str(), F_OK) == 0) {
                 lib_path = localized_path;
-                LOGI("Using localized path for injection: %s", lib_path.c_str());
+                LOGI("SUCCESS: Found localized library, using: %s", lib_path.c_str());
             } else {
+                int err = errno;
                 // Fallback to direct app_data_dir (old behavior)
                 std::string old_localized_path = app_data_dir + "/" + filename;
+                LOGI("Localized file %s not found (errno: %d). Checking fallback: %s", localized_path.c_str(), err, old_localized_path.c_str());
                 if (access(old_localized_path.c_str(), F_OK) == 0) {
                     lib_path = old_localized_path;
-                    LOGI("Using fallback localized path for injection: %s", lib_path.c_str());
+                    LOGI("SUCCESS: Using fallback localized library: %s", lib_path.c_str());
                 } else {
-                    LOGW("Localized path not found, falling back to original: %s (Checked %s and %s)", lib_path.c_str(), localized_path.c_str(), old_localized_path.c_str());
+                    LOGW("FAILED: No localized version found at %s or %s (Will use original: %s)", localized_path.c_str(), old_localized_path.c_str(), lib_path.c_str());
                 }
             }
+        } else {
+            LOGI("Library path is already outside /data/local/tmp or match prefix not found: %s", lib_path.c_str());
         }
     }
 
