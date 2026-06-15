@@ -214,8 +214,7 @@ class MyModule : public zygisk::ModuleBase {
             return;
         }
 
-        // Use the env provided in the args for the current thread/process context
-        JNIEnv *env = args->env ? args->env : this->env;
+        JNIEnv *env = this->env;
         if (!env) {
             LOGE("preAppSpecialize: JNIEnv is null, cannot proceed");
             return;
