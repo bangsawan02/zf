@@ -22,11 +22,53 @@ pid_t (*orig_vfork)();
 
 pid_t fork_replacement() {
     pid_t parent_pid = getpid();
-    LOGI("[child_gating][pid %d] detected fork/vfork", parent_pid);
+    LOGI("[child_gating][pid %d] detected fork", parent_pid);
 
     pid_t child_pid = orig_fork();
     if (child_pid != 0) {
         LOGI("[child_gating][pid %d] returning from forking %d", parent_pid, child_pid);
+        return child_pid;
+    }
+
+    child_pid = getpid();
+
+    auto logContext = "[child_gating][pid " + std::to_string(child_pid) + "] ";
+
+    if (child_gating_mode == "kill") {
+        LOGI("%skilling child process", logContext.c_str());
+        exit(0);
+    }
+
+    if (child_gating_mode == "freeze") {
+        LOGI("%sfreezing child process",  logContext.c_str());
+        std::promise<void>().get_future().wait();
+        return 0;
+    }
+
+    if (child_gating_mode != "inject") {
+        LOGI("%sunknown child_gating_mode %s",  logContext.c_str(), child_gating_mode.c_str());
+        return 0;
+    }
+
+    for (auto &lib_path : injected_libraries) {
+        LOGI("%sInjecting %s",  logContext.c_str(), lib_path.c_str());
+        inject_lib(lib_path, logContext);
+    }
+
+    return 0;
+}
+
+pid_t vfork_replacement() {
+    pid_t parent_pid = getpid();
+    LOGI("[child_gating][pid %d] detected vfork", parent_pid);
+
+    // CRITICAL: We cannot use orig_vfork() here because vfork shares memory with the parent.
+    // If we use vfork, any memory allocation, string creation, or dlopen in the child
+    // will corrupt the parent process's memory space and stack.
+    // By falling back to orig_fork(), the child gets its own memory space and can safely execute complex C++ logic.
+    pid_t child_pid = orig_fork();
+    if (child_pid != 0) {
+        LOGI("[child_gating][pid %d] returning from vforking %d", parent_pid, child_pid);
         return child_pid;
     }
 
@@ -67,19 +109,12 @@ void enable_child_gating(child_gating_config const &cfg) {
 
     void *forkAddr = dlsym(RTLD_DEFAULT, "fork");
     LOGI("[child_gating] fork address %p", forkAddr);
-    void *vforkAddr = dlsym(RTLD_DEFAULT, "vfork");
-    LOGI("[child_gating] vfork address %p", vforkAddr);
 
     DobbyHook(
         forkAddr,
         reinterpret_cast<void *>(fork_replacement),
         reinterpret_cast<void **>(&orig_fork));
     LOGI("[child_gating] fork hook installed");
-    DobbyHook(
-        vforkAddr,
-        reinterpret_cast<void *>(fork_replacement),
-        reinterpret_cast<void **>(&orig_vfork));
-    LOGI("[child_gating] vfork hook installed");
 
     LOGI("[child_gating] child gating enabled");
 }

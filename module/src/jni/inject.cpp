@@ -92,7 +92,7 @@ void inject_lib(std::string const &lib_path, std::string const &logContext) {
     }
 }
 
-static void inject_libs(target_config const &cfg) {
+static void inject_libs(target_config cfg) {
     // We need to wait for process initialization to complete.
     // Loading the gadget before that will freeze the process
     // before the init has completed. This make the process
