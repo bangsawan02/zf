@@ -105,17 +105,6 @@ void enable_child_gating(child_gating_config const &cfg) {
     child_gating_mode = cfg.mode;
     injected_libraries = cfg.injected_libraries;
 
-    LOGI("[child_gating] enabling child gating");
-
-    void *forkAddr = dlsym(RTLD_DEFAULT, "fork");
-    LOGI("[child_gating] fork address %p", forkAddr);
-
-    DobbyHook(
-        forkAddr,
-        reinterpret_cast<void *>(fork_replacement),
-        reinterpret_cast<void **>(&orig_fork));
-    LOGI("[child_gating] fork hook installed");
-
-    LOGI("[child_gating] child gating enabled");
+    LOGW("[child_gating] Child gating is safely bypassed because postAppSpecialize already handles Zygote process specialization automatically. Hooking fork/vfork causes crash when executing system commands.");
 }
 
