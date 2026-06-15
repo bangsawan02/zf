@@ -124,7 +124,7 @@ static void localize_single_lib(const std::string& lib_path, const std::string& 
             if (copy_file(lib_path, localized_path)) {
                 chown(localized_path.c_str(), uid, gid);
                 chmod(localized_path.c_str(), 0755);
-                LOGI("Localized library copied: %s -> %s (UID: %d, GID: %d)", lib_path.c_str(), localized_path.c_str(), uid, gid);
+                LOGI("Localized library successfully copied: %s -> %s (UID: %d, GID: %d)", lib_path.c_str(), localized_path.c_str(), uid, gid);
 
                 // Auto-provision a gadget configuration with "on_load": "resume" if it doesn't exist
                 if (lib_path.length() >= 3 && lib_path.substr(lib_path.length() - 3) == ".so") {
@@ -153,7 +153,7 @@ static void localize_single_lib(const std::string& lib_path, const std::string& 
                     }
                 }
             } else {
-                LOGE("Failed to copy library to app cache: %s -> %s", lib_path.c_str(), localized_path.c_str());
+                LOGE("CRITICAL: Failed to copy library to app cache: %s -> %s (Errno: %d)", lib_path.c_str(), localized_path.c_str(), errno);
             }
         } else {
             LOGW("Library path scheduled for injection does not exist in tmp: %s", lib_path.c_str());
@@ -173,13 +173,16 @@ class MyModule : public zygisk::ModuleBase {
 
         const char *raw_app_name = env->GetStringUTFChars(args->nice_name, nullptr);
         if (!raw_app_name) return;
-        std::string app_name(raw_app_name);
+        this->app_name = std::string(raw_app_name);
         this->env->ReleaseStringUTFChars(args->nice_name, raw_app_name);
 
         const char *raw_app_data_dir = env->GetStringUTFChars(args->app_data_dir, nullptr);
         if (!raw_app_data_dir) return;
-        std::string app_data_dir(raw_app_data_dir);
+        this->app_data_dir = std::string(raw_app_data_dir);
         this->env->ReleaseStringUTFChars(args->app_data_dir, raw_app_data_dir);
+
+        std::string app_name = this->app_name;
+        std::string app_data_dir = this->app_data_dir;
 
         std::string module_dir = std::string("/data/local/tmp/re.zyg.fri");
 
@@ -231,6 +234,7 @@ class MyModule : public zygisk::ModuleBase {
             }
 
             for (auto const &lib_path : cfg->injected_libraries) {
+                LOGI("DEBUG: Localizing library: %s into %s", lib_path.c_str(), app_data_dir.c_str());
                 localize_single_lib(lib_path, app_data_dir, uid, gid);
             }
 
@@ -243,28 +247,12 @@ class MyModule : public zygisk::ModuleBase {
     }
 
     void postAppSpecialize(const AppSpecializeArgs *args) override {
-        if (!args->nice_name || !args->app_data_dir) {
+        if (this->app_name.empty() || this->app_data_dir.empty()) {
             this->api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
             return;
         }
 
-        const char *raw_app_name = env->GetStringUTFChars(args->nice_name, nullptr);
-        if (!raw_app_name) {
-            this->api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
-            return;
-        }
-        std::string app_name = std::string(raw_app_name);
-        this->env->ReleaseStringUTFChars(args->nice_name, raw_app_name);
-
-        const char *raw_app_data_dir = env->GetStringUTFChars(args->app_data_dir, nullptr);
-        if (!raw_app_data_dir) {
-            this->api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
-            return;
-        }
-        std::string app_data_dir = std::string(raw_app_data_dir);
-        this->env->ReleaseStringUTFChars(args->app_data_dir, raw_app_data_dir);
-
-        if (!check_and_inject(app_name, app_data_dir)) {
+        if (!check_and_inject(this->app_name, this->app_data_dir)) {
             this->api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
         }
     }
@@ -272,6 +260,8 @@ class MyModule : public zygisk::ModuleBase {
  private:
     Api *api;
     JNIEnv *env;
+    std::string app_name;
+    std::string app_data_dir;
 };
 
 REGISTER_ZYGISK_MODULE(MyModule)

@@ -85,6 +85,11 @@ void inject_lib(std::string const &lib_path, std::string const &logContext) {
 
     LOGE("%sFailed to inject %s (xdl_open): %s", logContext.c_str(), lib_path.c_str(), xdl_error_msg);
     LOGE("%sFailed to inject %s (dlopen): %s", logContext.c_str(), lib_path.c_str(), dl_error_msg);
+    
+    // Check if file is readable
+    if (access(lib_path.c_str(), R_OK) != 0) {
+        LOGE("%sInjection failed: File is not readable or does not exist: %s (Errno: %d)", logContext.c_str(), lib_path.c_str(), errno);
+    }
 }
 
 static void inject_libs(target_config const &cfg) {
