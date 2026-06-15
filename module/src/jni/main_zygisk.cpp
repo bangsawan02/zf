@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <cerrno>
+#include <cstring>
 
 #include "inject.h"
 #include "log.h"
@@ -117,7 +118,17 @@ static void localize_single_lib(const std::string& lib_path, const std::string& 
     if (lib_path.rfind("/data/local/tmp/re.zyg.fri/", 0) == 0) {
         size_t last_slash = lib_path.find_last_of('/');
         std::string filename = (last_slash == std::string::npos) ? lib_path : lib_path.substr(last_slash + 1);
-        std::string localized_path = app_data_dir + "/" + filename;
+        
+        // Use a dedicated subdirectory in app's cache for our localized files
+        std::string localized_dir = app_data_dir + "/.zygisk_frida";
+        if (mkdir(localized_dir.c_str(), 0755) != 0 && errno != EEXIST) {
+            LOGE("Failed to create localized directory %s: %s", localized_dir.c_str(), strerror(errno));
+        }
+        if (chown(localized_dir.c_str(), uid, gid) != 0) {
+            LOGW("Failed to chown localized directory %s: %s", localized_dir.c_str(), strerror(errno));
+        }
+        
+        std::string localized_path = localized_dir + "/" + filename;
 
         struct stat st;
         if (stat(lib_path.c_str(), &st) == 0) {
@@ -130,10 +141,10 @@ static void localize_single_lib(const std::string& lib_path, const std::string& 
                 if (lib_path.length() >= 3 && lib_path.substr(lib_path.length() - 3) == ".so") {
                     std::string config_src = lib_path.substr(0, lib_path.length() - 3) + ".config.so";
                     std::string config_filename = filename.substr(0, filename.length() - 3) + ".config.so";
-                    std::string config_dst = app_data_dir + "/" + config_filename;
+                    std::string config_dst = localized_dir + "/" + config_filename;
 
                     if (stat(config_src.c_str(), &st) == 0) {
-                        if (copy_config_and_rewrite(config_src, config_dst, app_data_dir)) {
+                        if (copy_config_and_rewrite(config_src, config_dst, localized_dir)) {
                             chown(config_dst.c_str(), uid, gid);
                             chmod(config_dst.c_str(), 0644);
                             LOGI("Copied and successfully rewrote config: %s -> %s", config_src.c_str(), config_dst.c_str());
@@ -144,7 +155,7 @@ static void localize_single_lib(const std::string& lib_path, const std::string& 
                         // Create a default config that resumes the app immediately so it doesn't wait
                         int config_fd = open(config_dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
                         if (config_fd >= 0) {
-                            std::string default_config = "{\n  \"interaction\": {\n    \"type\": \"script\",\n    \"path\": \"" + app_data_dir + "/script.js\"\n  }\n}";
+                            std::string default_config = "{\n  \"interaction\": {\n    \"type\": \"script\",\n    \"path\": \"" + localized_dir + "/script.js\"\n  }\n}";
                             write(config_fd, default_config.c_str(), default_config.length());
                             close(config_fd);
                             chown(config_dst.c_str(), uid, gid);
@@ -218,10 +229,20 @@ class MyModule : public zygisk::ModuleBase {
         if (cfg.has_value() && cfg->enabled) {
             int uid = args->uid;
             int gid = args->gid;
+            
+            LOGI("Target detected: %s (Data dir: %s, UID: %d, GID: %d)", app_name.c_str(), app_data_dir.c_str(), uid, gid);
 
             // 4. Ensure script.js is copied/localized to app_data_dir for Frida script interaction
             std::string script_src = module_dir + "/script.js";
-            std::string script_dst = app_data_dir + "/script.js";
+            std::string localized_dir = app_data_dir + "/.zygisk_frida";
+            if (mkdir(localized_dir.c_str(), 0755) != 0 && errno != EEXIST) {
+                LOGE("Failed to create localized directory for script %s: %s", localized_dir.c_str(), strerror(errno));
+            }
+            if (chown(localized_dir.c_str(), uid, gid) != 0) {
+                LOGW("Failed to chown localized directory for script %s: %s", localized_dir.c_str(), strerror(errno));
+            }
+            
+            std::string script_dst = localized_dir + "/script.js";
             struct stat script_st;
             if (stat(script_src.c_str(), &script_st) == 0) {
                 if (copy_file(script_src, script_dst)) {
@@ -229,12 +250,13 @@ class MyModule : public zygisk::ModuleBase {
                     chmod(script_dst.c_str(), 0644);
                     LOGI("Localized script.js copied: %s -> %s (UID: %d, GID: %d)", script_src.c_str(), script_dst.c_str(), uid, gid);
                 } else {
-                    LOGE("Failed to copy script.js to app cache");
+                    LOGE("Failed to copy script.js to app cache at %s", script_dst.c_str());
                 }
+            } else {
+                LOGW("Source script.js not found at %s", script_src.c_str());
             }
 
             for (auto const &lib_path : cfg->injected_libraries) {
-                LOGI("DEBUG: Localizing library: %s into %s", lib_path.c_str(), app_data_dir.c_str());
                 localize_single_lib(lib_path, app_data_dir, uid, gid);
             }
 

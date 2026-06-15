@@ -2,5 +2,9 @@
   "interaction": {
     "type": "script",
     "path": "/data/local/tmp/re.zyg.fri/script.js"
+  },
+  "logging": {
+    "level": "info",
+    "type": "console"
   }
 }

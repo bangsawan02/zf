@@ -1,6 +1,7 @@
 #include "inject.h"
 
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include <chrono>
 #include <cinttypes>
@@ -122,21 +123,34 @@ bool check_and_inject(std::string const &app_name, std::string const &app_data_d
     LOGI("App detected: %s", app_name.c_str());
     LOGI("PID: %d", getpid());
 
-
     auto target_config = cfg.value();
     if (!target_config.enabled) {
         LOGI("Injection disabled for %s", app_name.c_str());
         return false;
     }
 
-    // Translate any paths targeted to /data/local/tmp/re.zyg.fri to the specialized localized app_data_dir
+    std::string localized_dir = app_data_dir + "/.zygisk_frida";
+
+    // Translate any paths targeted to /data/local/tmp/re.zyg.fri to the specialized localized subdirectory
     for (auto &lib_path : target_config.injected_libraries) {
         if (lib_path.rfind("/data/local/tmp/re.zyg.fri/", 0) == 0) {
             size_t last_slash = lib_path.find_last_of('/');
             std::string filename = (last_slash == std::string::npos) ? lib_path : lib_path.substr(last_slash + 1);
-            std::string localized_path = app_data_dir + "/" + filename;
+            
+            // Check in the localized subdirectory first
+            std::string localized_path = localized_dir + "/" + filename;
             if (access(localized_path.c_str(), F_OK) == 0) {
                 lib_path = localized_path;
+                LOGI("Using localized path for injection: %s", lib_path.c_str());
+            } else {
+                // Fallback to direct app_data_dir (old behavior)
+                std::string old_localized_path = app_data_dir + "/" + filename;
+                if (access(old_localized_path.c_str(), F_OK) == 0) {
+                    lib_path = old_localized_path;
+                    LOGI("Using fallback localized path for injection: %s", lib_path.c_str());
+                } else {
+                    LOGW("Localized path not found, falling back to original: %s (Checked %s and %s)", lib_path.c_str(), localized_path.c_str(), old_localized_path.c_str());
+                }
             }
         }
     }
@@ -146,9 +160,15 @@ bool check_and_inject(std::string const &app_name, std::string const &app_data_d
             if (lib_path.rfind("/data/local/tmp/re.zyg.fri/", 0) == 0) {
                 size_t last_slash = lib_path.find_last_of('/');
                 std::string filename = (last_slash == std::string::npos) ? lib_path : lib_path.substr(last_slash + 1);
-                std::string localized_path = app_data_dir + "/" + filename;
+                
+                std::string localized_path = localized_dir + "/" + filename;
                 if (access(localized_path.c_str(), F_OK) == 0) {
                     lib_path = localized_path;
+                } else {
+                    std::string old_localized_path = app_data_dir + "/" + filename;
+                    if (access(old_localized_path.c_str(), F_OK) == 0) {
+                        lib_path = old_localized_path;
+                    }
                 }
             }
         }
