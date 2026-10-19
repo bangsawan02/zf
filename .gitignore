@@ -11,3 +11,5 @@ local.properties
 /gadget/*
 !.gitkeep
 out
+/.termux-build
+/compile_commands.json
