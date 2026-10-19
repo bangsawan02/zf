@@ -345,14 +345,16 @@ static void localize_single_lib(const char *lib_path, const char *app_data_dir, 
                     snprintf(default_config, sizeof(default_config),
                              "{\n"
                              "  \"interaction\": {\n"
-                             "    \"type\": \"script\",\n"
-                             "    \"path\": \"%s/script.js\"\n"
+                             "    \"type\": \"listen\",\n"
+                             "    \"address\": \"127.0.0.1\",\n"
+                             "    \"port\": 27042,\n"
+                             "    \"on_load\": \"resume\"\n"
                              "  },\n"
                              "  \"logging\": {\n"
                              "    \"level\": \"info\",\n"
                              "    \"type\": \"logcat\"\n"
                              "  }\n"
-                             "}", localized_dir);
+                             "}");
                     for (int i = 0; i < 3; i++) {
                         int config_fd = open(config_dests[i], O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
                         if (config_fd >= 0) {
