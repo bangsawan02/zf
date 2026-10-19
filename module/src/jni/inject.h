@@ -1,9 +1,7 @@
 #ifndef ZYGISKFRIDA_INJECT_H
 #define ZYGISKFRIDA_INJECT_H
 
-#include <string>
-
-void inject_lib(std::string const& lib_path, std::string const& logContext);
-bool check_and_inject(std::string const& app_name, std::string const& app_data_dir);
+void inject_lib(const char *lib_path, const char *log_context);
+int check_and_inject(const char *app_name, const char *app_data_dir);
 
 #endif  // ZYGISKFRIDA_INJECT_H

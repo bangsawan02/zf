@@ -59,7 +59,8 @@ command -v python >/dev/null || die "python not found: pkg install -y python"
 # must never abort a host app because of an exception crossing the boundary.
 # ---------------------------------------------------------------------------
 COMMON_CXX=(
-    -std=c++17 -fPIC -fno-exceptions -fno-rtti
+    -std=c++17 -fPIC -fno-exceptions -fno-rtti -fno-threadsafe-statics
+    -fvisibility=hidden -fvisibility-inlines-hidden
     -fno-omit-frame-pointer
     -Wall -Wextra -Wno-unused-parameter -Wno-unused-function
     -I"$JNI" -I"$JNI/xdl/include" -I"$JNI/include"
@@ -96,13 +97,27 @@ done
 say "Compiling module (C++)"
 for f in inject.cpp config.cpp child_gating.cpp main_zygisk.cpp; do
     base="$(basename "$f" .cpp)"
-    clang++ -c "${CXX_OPT[@]}" "${COMMON_CXX[@]}" -include optional \
+    clang++ -c "${CXX_OPT[@]}" "${COMMON_CXX[@]}" \
         "$JNI/$f" -o "$OBJ/$base.o"
 done
 
 say "Linking libzygiskfrida.so"
 clang++ -shared -fPIC "$OBJ"/*.o -o "$BUILD/libzygiskfrida.so.unstripped" \
-    -lc++_shared -llog -ldl -Wl,--allow-shlib-undefined
+    -nostdlib++ -llog -ldl -Wl,--allow-shlib-undefined
+
+# The module must not depend on libc++ at all. It is loaded by Zygisk's
+# builtin linker, which only resolves bionic symbols, and Android 13 has no
+# /system/lib64/libc++_shared.so any more. All std:: containers/streams were
+# replaced with plain C, so the module should have no libc++ imports.
+if readelf -d "$BUILD/libzygiskfrida.so.unstripped" 2>/dev/null | grep -q "libc++"; then
+    die "module still depends on libc++ - remove the remaining std:: usage"
+fi
+
+if nm -D -u "$BUILD/libzygiskfrida.so.unstripped" 2>/dev/null | grep -Eq "(_ZNSt|_ZSt|__ndk1|__cxx11)"; then
+    echo "--- unresolved C++ symbols ---" >&2
+    nm -D -u "$BUILD/libzygiskfrida.so.unstripped" | grep -E "(_ZNSt|_ZSt|__ndk1|__cxx11)" >&2
+    die "module has unresolved C++ runtime symbols"
+fi
 
 # Keep an unstripped copy for symbolication, then strip the shipped binary.
 cp "$BUILD/libzygiskfrida.so.unstripped" "$BUILD/libzygiskfrida.so.debug"
@@ -137,7 +152,7 @@ say "Generating compile_commands.json"
     for f in inject.cpp config.cpp child_gating.cpp main_zygisk.cpp; do
         [ $first -eq 1 ] || printf ',\n'
         first=0
-        printf '  {"directory": "%s", "file": "%s", "arguments": ["clang++", "-c", %s, "-include", "optional", "%s"]}' \
+        printf '  {"directory": "%s", "file": "%s", "arguments": ["clang++", "-c", %s, "%s"]}' \
             "$JNI" "$JNI/$f" \
             "$(printf '"%s", ' "${CXX_OPT[@]}" "${COMMON_CXX[@]}")" \
             "$JNI/$f"

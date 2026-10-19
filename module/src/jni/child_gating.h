@@ -3,6 +3,6 @@
 
 #include "config.h"
 
-void enable_child_gating(child_gating_config const& cfg);
+void enable_child_gating(const struct child_gating_config *cfg);
 
 #endif  // ZYGISKFRIDA_CHILD_GATING_H

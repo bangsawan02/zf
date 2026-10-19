@@ -1,250 +1,346 @@
 #include "config.h"
 
-#include <string>
-#include <fstream>
-#include <sstream>
-#include <optional>
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "rapidjson/document.h"
-#include "rapidjson/istreamwrapper.h"
 #include "rapidjson/error/en.h"
 #include "log.h"
 
 // This must work in a non-exception environment as the libcxx we use don't have support for exception.
 // Should avoid any libraries aborting on parse error as this will run on every app start and
 // might otherwise cause issues for any app starting if misconfigured.
+//
+// The code intentionally avoids std::string / std::vector / std::optional. RapidJSON is
+// header-only and only uses malloc/free here, so this translation unit emits no libc++
+// runtime imports.
 
-static std::optional<std::vector<std::string>> deserialize_libraries(const rapidjson::Value &doc) {
+static void copy_str(char *dst, size_t dst_size, const char *src) {
+    if (dst == NULL || dst_size == 0) {
+        return;
+    }
+    if (src == NULL) {
+        src = "";
+    }
+    size_t len = strlen(src);
+    if (len >= dst_size) {
+        len = dst_size - 1;
+    }
+    memcpy(dst, src, len);
+    dst[len] = '\0';
+}
+
+static char *read_entire_file(const char *path, size_t *out_len) {
+    FILE *fp = fopen(path, "rb");
+    if (fp == NULL) {
+        return NULL;
+    }
+
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        fclose(fp);
+        return NULL;
+    }
+    long size = ftell(fp);
+    if (size < 0) {
+        fclose(fp);
+        return NULL;
+    }
+    rewind(fp);
+
+    char *buffer = (char *) malloc((size_t) size + 1);
+    if (buffer == NULL) {
+        fclose(fp);
+        return NULL;
+    }
+
+    size_t read_bytes = fread(buffer, 1, (size_t) size, fp);
+    fclose(fp);
+    buffer[read_bytes] = '\0';
+
+    if (out_len != NULL) {
+        *out_len = read_bytes;
+    }
+    return buffer;
+}
+
+static int deserialize_libraries(const rapidjson::Value &doc,
+                                 char libraries[ZF_MAX_LIBS][ZF_MAX_PATH],
+                                 int *count) {
     if (!doc.IsArray()) {
         LOGE("invalid config: expected injected_libraries to be an array");
-        return std::nullopt;
+        return 0;
     }
 
-    std::vector<std::string> result;
-
+    int n = 0;
     for (rapidjson::SizeType i = 0; i < doc.Size(); i++) {
-        auto &library = doc[i];
+        const rapidjson::Value &library = doc[i];
         if (!library.IsObject()) {
             LOGE("invalid config: expected injected_libraries members to be objects");
-            return std::nullopt;
+            return 0;
         }
 
-        auto &path = library["path"];
+        const rapidjson::Value &path = library["path"];
         if (!path.IsString()) {
             LOGE("invalid config: expected injected_libraries.path to be a string");
-            return std::nullopt;
+            return 0;
         }
 
-        result.emplace_back(path.GetString());
+        if (n >= ZF_MAX_LIBS) {
+            LOGE("invalid config: too many injected_libraries (max %d)", ZF_MAX_LIBS);
+            return 0;
+        }
+
+        copy_str(libraries[n], ZF_MAX_PATH, path.GetString());
+        n++;
     }
 
-    return result;
+    *count = n;
+    return 1;
 }
 
-static std::optional<child_gating_config> deserialize_child_gating_config(const rapidjson::Value &doc) {
+static int deserialize_child_gating_config(const rapidjson::Value &doc, struct child_gating_config *out) {
     if (!doc.IsObject()) {
-        return std::nullopt;
+        return 0;
     }
 
-    child_gating_config result = {};
+    memset(out, 0, sizeof(*out));
 
-    auto &enabled = doc["enabled"];
+    const rapidjson::Value &enabled = doc["enabled"];
     if (!enabled.IsBool()) {
         LOGE("invalid config: expected child_gating.enabled members to be a bool");
-        return std::nullopt;
+        return 0;
     }
-    result.enabled = enabled.GetBool();
+    out->enabled = enabled.GetBool() ? 1 : 0;
 
-    auto &mode = doc["mode"];
+    const rapidjson::Value &mode = doc["mode"];
     if (!mode.IsString()) {
         LOGE("invalid config: expected child_gating.mode members to be a string");
-        return std::nullopt;
+        return 0;
     }
-    result.mode = mode.GetString();
+    copy_str(out->mode, ZF_MAX_MODE, mode.GetString());
 
     if (doc.HasMember("injected_libraries")) {
-        auto injected_libraries = deserialize_libraries(doc["injected_libraries"]);
-        if (!injected_libraries.has_value()) {
-            return std::nullopt;
+        if (!deserialize_libraries(doc["injected_libraries"],
+                                   out->injected_libraries,
+                                   &out->injected_libraries_count)) {
+            return 0;
         }
-        result.injected_libraries = injected_libraries.value();
     }
 
-    return result;
+    return 1;
 }
 
-static std::optional<target_config> deserialize_target_config(const rapidjson::Value &doc) {
+static int deserialize_target_config(const rapidjson::Value &doc, struct target_config *out) {
     if (!doc.IsObject()) {
         LOGE("expected config targets array to contain objects");
-        return std::nullopt;
+        return 0;
     }
 
-    target_config result = {};
+    memset(out, 0, sizeof(*out));
 
-    auto &app_name = doc["app_name"];
+    const rapidjson::Value &app_name = doc["app_name"];
     if (!app_name.IsString()) {
         LOGE("expected config target to have a valid app_name");
-        return std::nullopt;
+        return 0;
     }
-    result.app_name = app_name.GetString();
+    copy_str(out->app_name, ZF_MAX_PATH, app_name.GetString());
 
-    auto &enabled = doc["enabled"];
+    const rapidjson::Value &enabled = doc["enabled"];
     if (!enabled.IsBool()) {
         LOGE("invalid config: expected targets.enabled members to be a bool");
-        return std::nullopt;
+        return 0;
     }
-    result.enabled = enabled.GetBool();
+    out->enabled = enabled.GetBool() ? 1 : 0;
 
-    auto &start_up_delay_ms = doc["start_up_delay_ms"];
+    const rapidjson::Value &start_up_delay_ms = doc["start_up_delay_ms"];
     if (!start_up_delay_ms.IsUint64()) {
         LOGE("expected config target start_up_delay_ms to be an uint64");
-        return std::nullopt;
+        return 0;
     }
-    result.start_up_delay_ms = start_up_delay_ms.GetUint64();
+    out->start_up_delay_ms = start_up_delay_ms.GetUint64();
 
-    auto &injected_libaries = doc["injected_libraries"];
-    auto deserialized_libraries = deserialize_libraries(injected_libaries);
-    if (!deserialized_libraries.has_value()) {
-        return std::nullopt;
+    const rapidjson::Value &injected_libraries = doc["injected_libraries"];
+    if (!deserialize_libraries(injected_libraries,
+                               out->injected_libraries,
+                               &out->injected_libraries_count)) {
+        return 0;
     }
-    result.injected_libraries = deserialized_libraries.value();
 
     if (doc.HasMember("child_gating")) {
-        auto child_gating = deserialize_child_gating_config(doc["child_gating"]);
-        if (!child_gating.has_value()) {
-            return std::nullopt;
-        }
-        result.child_gating = child_gating.value();
-    }
-
-    return result;
-}
-
-static std::vector<std::string> split(std::string const &str, char delimiter) {
-    std::vector<std::string> result;
-    std::stringstream ss(str);
-
-    std::string tmp;
-    while (getline(ss, tmp, delimiter)) {
-        result.push_back(tmp);
-    }
-
-    return result;
-}
-
-static std::vector<std::string> parse_injected_libraries(std::string const &module_dir) {
-    auto config_file_path = module_dir + "/injected_libraries";
-
-    std::ifstream config_file(config_file_path);
-    if (!config_file.is_open()) {
-        return {module_dir + "/libgadget.so"};
-    }
-
-    std::vector<std::string> injected_libraries;
-
-    std::string libpath;
-    while (getline(config_file, libpath)) {
-        // Remove \r if present (Windows line endings)
-        if (!libpath.empty() && libpath.back() == '\r') {
-            libpath.pop_back();
-        }
-        // Trim leading/trailing whitespace
-        libpath.erase(0, libpath.find_first_not_of(" \t\n\r"));
-        libpath.erase(libpath.find_last_not_of(" \t\n\r") + 1);
-
-        if (!libpath.empty()) {
-            injected_libraries.push_back(libpath);
+        if (!deserialize_child_gating_config(doc["child_gating"], &out->child_gating)) {
+            return 0;
         }
     }
 
-    config_file.close();
-
-    return injected_libraries;
+    return 1;
 }
 
-static std::optional<target_config> load_simple_config(std::string const &module_dir, std::string const &app_name) {
-    std::ifstream config_file(module_dir + "/target_packages");
-    if (!config_file.is_open()) {
-        return std::nullopt;
+static void trim_line(char *line) {
+    size_t len = strlen(line);
+    while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+        line[--len] = '\0';
     }
 
-    std::string line;
-    while (getline(config_file, line)) {
-        if (line.empty()) {
+    char *start = line;
+    while (*start == ' ' || *start == '\t') {
+        start++;
+    }
+
+    char *end = start + strlen(start);
+    while (end > start && (end[-1] == ' ' || end[-1] == '\t')) {
+        *--end = '\0';
+    }
+
+    if (start != line) {
+        memmove(line, start, strlen(start) + 1);
+    }
+}
+
+static void parse_injected_libraries(const char *module_dir,
+                                     char libraries[ZF_MAX_LIBS][ZF_MAX_PATH],
+                                     int *count) {
+    char config_file_path[ZF_MAX_PATH * 2];
+    snprintf(config_file_path, sizeof(config_file_path), "%s/injected_libraries", module_dir);
+
+    FILE *config_file = fopen(config_file_path, "r");
+    if (config_file == NULL) {
+        copy_str(libraries[0], ZF_MAX_PATH, "");
+        snprintf(libraries[0], ZF_MAX_PATH, "%s/libgadget.so", module_dir);
+        *count = 1;
+        return;
+    }
+
+    int n = 0;
+    char line[ZF_MAX_PATH * 2];
+    while (fgets(line, sizeof(line), config_file) != NULL) {
+        trim_line(line);
+        if (line[0] == '\0') {
+            continue;
+        }
+        if (n >= ZF_MAX_LIBS) {
+            LOGE("invalid injected_libraries: too many entries (max %d)", ZF_MAX_LIBS);
+            break;
+        }
+        copy_str(libraries[n], ZF_MAX_PATH, line);
+        n++;
+    }
+
+    fclose(config_file);
+    *count = n;
+}
+
+static int load_simple_config(const char *module_dir, const char *app_name, struct target_config *out) {
+    char config_file_path[ZF_MAX_PATH * 2];
+    snprintf(config_file_path, sizeof(config_file_path), "%s/target_packages", module_dir);
+
+    FILE *config_file = fopen(config_file_path, "r");
+    if (config_file == NULL) {
+        return 0;
+    }
+
+    char line[ZF_MAX_PATH * 2];
+    while (fgets(line, sizeof(line), config_file) != NULL) {
+        trim_line(line);
+        if (line[0] == '\0') {
             continue;
         }
 
-        auto splitted = split(line, ',');
-        if (splitted[0] != app_name) {
+        char *comma = strchr(line, ',');
+        char *delay = NULL;
+        if (comma != NULL) {
+            *comma = '\0';
+            delay = comma + 1;
+        }
+        trim_line(line);
+        if (delay != NULL) {
+            trim_line(delay);
+        }
+
+        if (strcmp(line, app_name) != 0) {
             continue;
         }
 
-        target_config cfg = {};
-        cfg.app_name = splitted[0];
-        cfg.enabled = true;
-        if (splitted.size() >= 2) {
-            cfg.start_up_delay_ms = std::strtoul(splitted[1].c_str(), nullptr, 10);
+        memset(out, 0, sizeof(*out));
+        copy_str(out->app_name, ZF_MAX_PATH, line);
+        out->enabled = 1;
+        if (delay != NULL && delay[0] != '\0') {
+            out->start_up_delay_ms = strtoull(delay, NULL, 10);
         }
-        cfg.injected_libraries = parse_injected_libraries(module_dir);
+        parse_injected_libraries(module_dir, out->injected_libraries, &out->injected_libraries_count);
 
-        config_file.close();
-        return cfg;
+        fclose(config_file);
+        return 1;
     }
 
-    config_file.close();
-    return std::nullopt;
+    fclose(config_file);
+    return 0;
 }
 
-static std::optional<target_config> load_advanced_config(std::string const &module_dir, std::string const &app_name) {
-    std::ifstream config_file(module_dir + "/config.json");
-    if (!config_file.is_open()) {
-        return std::nullopt;
-    }
+static int load_advanced_config(const char *module_dir, const char *app_name, struct target_config *out) {
+    char config_file_path[ZF_MAX_PATH * 2];
+    snprintf(config_file_path, sizeof(config_file_path), "%s/config.json", module_dir);
 
-    rapidjson::IStreamWrapper config_stream{config_file};
+    size_t length = 0;
+    char *data = read_entire_file(config_file_path, &length);
+    if (data == NULL) {
+        return 0;
+    }
 
     rapidjson::Document doc;
-    doc.ParseStream(config_stream);
-    config_file.close();
+    doc.Parse(data, length);
 
     if (doc.HasParseError()) {
         LOGE("config is not a valid json file offset %u: %s",
              (unsigned) doc.GetErrorOffset(),
              GetParseError_En(doc.GetParseError()));
-        return std::nullopt;
+        free(data);
+        return 0;
     }
 
     if (!doc.IsObject()) {
         LOGE("config expected a json root object");
-        return std::nullopt;
+        free(data);
+        return 0;
     }
 
-    auto &targets = doc["targets"];
+    const rapidjson::Value &targets = doc["targets"];
     if (!targets.IsArray()) {
         LOGE("expected config targets to be an array");
-        return std::nullopt;
+        free(data);
+        return 0;
     }
 
+    int found = 0;
     for (rapidjson::SizeType i = 0; i < targets.Size(); i++) {
-        auto deserialized_target = deserialize_target_config(targets[i]);
-        if (!deserialized_target.has_value()) {
-            return std::nullopt;
+        struct target_config target;
+        if (!deserialize_target_config(targets[i], &target)) {
+            // Match upstream behavior: any malformed target invalidates the
+            // advanced config, then the simple config may be used.
+            free(data);
+            return 0;
         }
 
-        auto target = deserialized_target.value();
-        if (target.app_name == app_name) {
-            return target;
+        if (strcmp(target.app_name, app_name) == 0) {
+            *out = target;
+            found = 1;
+            break;
         }
     }
 
-    return std::nullopt;
+    free(data);
+    return found;
 }
 
-std::optional<target_config> load_config(std::string const &module_dir, std::string const &app_name) {
-    auto cfg = load_advanced_config(module_dir, app_name);
-    if (cfg.has_value()) {
-        return cfg;
+int load_config(const char *module_dir, const char *app_name, struct target_config *out) {
+    if (module_dir == NULL || app_name == NULL || out == NULL) {
+        return 0;
     }
 
-    return load_simple_config(module_dir, app_name);
+    if (load_advanced_config(module_dir, app_name, out)) {
+        return 1;
+    }
+
+    return load_simple_config(module_dir, app_name, out);
 }
