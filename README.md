@@ -18,11 +18,37 @@ more stealthy way.
 This repo also provides a [Riru](https://github.com/RikkaApps/Riru) flavor in case you are still
 using riru with an older magisk version rather than zygisk.
 
+## Running it on Termux (no Android SDK, no Gradle)
+
+This fork is built and deployed entirely from a phone. See
+[`docs/ONYXZYGISK.md`](docs/ONYXZYGISK.md) for the full runbook.
+
+| Doc | Covers |
+|---|---|
+| [`docs/ONYXZYGISK.md`](docs/ONYXZYGISK.md) | OnyxZygisk runtime, start/stop without reboot, debugging |
+| [`docs/advanced_config.md`](docs/advanced_config.md) | `config.json` reference |
+| [`docs/simple_config.md`](docs/simple_config.md) | `target_packages` reference |
+| [`docs/onyx.sh`](docs/onyx.sh) | `start` / `stop` / `restart` / `status` / `install` helper |
+| [`docs/attach.py`](docs/attach.py) | attach to a gadget listener and run a script |
+| [`docs/fix_layout.sh`](docs/fix_layout.sh) | lay out the OnyxZygisk release zip correctly |
+
+Quick start:
+
+```sh
+./build-termux.sh          # build the module, no Gradle / no NDK
+./docs/onyx.sh install     # install the OnyxZygisk runtime
+./docs/onyx.sh start       # start it - no reboot required
+```
+
+The gadget configs that the module reads live in `/data/local/tmp/re.zyg.fri`
+and are archived in [`bangsawan02/re.zyg.fri`](https://github.com/bangsawan02/re.zyg.fri).
+
 ## How to use the module
 
 ### Prerequisites
 - Rooted device/emulator
-- Zygisk available and enabled
+- Zygisk available and enabled (OnyxZygisk recommended - it can hot-swap
+  modules without a reboot)
 
 ### Quick start
 - Download the latest release from the [Release Page](https://github.com/lico-n/ZygiskFrida/releases)\
