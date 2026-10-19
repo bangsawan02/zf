@@ -1,6 +1,5 @@
 #include "child_gating.h"
 
-#include <dobby.h>
 #include <log.h>
 #include <unistd.h>
 #include <xdl.h>
