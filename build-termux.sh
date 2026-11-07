@@ -27,8 +27,8 @@ OUT="$ROOT/../ZygiskFrida-termux-zygisk.zip"
 
 MODULE_ID="zygiskfrida"
 MODULE_NAME="ZygiskFrida"
-MODULE_VERSION="v1.9.0"
-MODULE_VERSION_CODE="12"
+MODULE_VERSION="v1.10.0"
+MODULE_VERSION_CODE="13"
 MODULE_AUTHOR="lico-n"
 MODULE_DESC="Injects frida gadget via zygisk. (flavor: zygisk)"
 FLAVOR="zygisk"
@@ -95,7 +95,7 @@ for f in xdl/xdl.c xdl/xdl_iterate.c xdl/xdl_linker.c xdl/xdl_lzma.c xdl/xdl_uti
 done
 
 say "Compiling module (C++)"
-for f in inject.cpp config.cpp child_gating.cpp main_zygisk.cpp; do
+for f in inject.cpp config.cpp child_gating.cpp main_zygisk.cpp stealth.cpp; do
     base="$(basename "$f" .cpp)"
     clang++ -c "${CXX_OPT[@]}" "${COMMON_CXX[@]}" \
         "$JNI/$f" -o "$OBJ/$base.o"
@@ -130,8 +130,8 @@ cp "$BUILD/libzygiskfrida.so.unstripped" "$BUILD/libzygiskfrida.so"
 
 # Keep the unstripped binary around for crash symbolication.
 cp "$BUILD/libzygiskfrida.so.unstripped" "$BUILD/symbols/libzygiskfrida.so.debug"
-if command -v llvm-addr2line >/dev/null; then
-    llvm-addr2line -f -C -e "$BUILD/libzygiskfrida.so.unstripped" > "$BUILD/symbols/symbols.txt" 2>/dev/null || true
+if command -v llvm-nm >/dev/null; then
+    llvm-nm --demangle "$BUILD/libzygiskfrida.so.unstripped" > "$BUILD/symbols/symbols.txt" 2>/dev/null || true
 fi
 
 # ---------------------------------------------------------------------------
@@ -149,7 +149,7 @@ say "Generating compile_commands.json"
             "$(printf '"%s", ' "${C_OPT[@]}" "${COMMON_C[@]}")" \
             "$JNI/$f"
     done
-    for f in inject.cpp config.cpp child_gating.cpp main_zygisk.cpp; do
+    for f in inject.cpp config.cpp child_gating.cpp main_zygisk.cpp stealth.cpp; do
         [ $first -eq 1 ] || printf ',\n'
         first=0
         printf '  {"directory": "%s", "file": "%s", "arguments": ["clang++", "-c", %s, "%s"]}' \

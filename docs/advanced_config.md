@@ -1,5 +1,10 @@
 # Advanced Config
 
+> Looking for multi-target setup, wildcard packages, stealth or hot reload?
+> Start with [`multi_target.md`](multi_target.md) and
+> [`stealth_and_hotreload.md`](stealth_and_hotreload.md). This page documents
+> the original v1 schema, which is still fully supported.
+
 For the previous configuration method with various files, see [simple config](simple_config.md).
 It remains a valid method of configuration but the structured configuration method specified here is the preferred
 method in the future and also supports more features.

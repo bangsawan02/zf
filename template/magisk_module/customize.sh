@@ -61,15 +61,35 @@ ui_print "- Extracting config.json.example"
 extract "$ZIPFILE" "config.json.example" "$TMP_MODULE_DIR" true
 extract "$ZIPFILE" "config.json.example" "$MODPATH"      true
 
+# Keep a private copy of the live config so post-fs-data can restore it when
+# /data/local/tmp gets wiped between boots.
+ui_print "- Extracting live config.json"
+extract "$ZIPFILE" "config.json" "$MODPATH" true
+
+ui_print "- Extracting post-fs-data.sh"
+extract "$ZIPFILE" "post-fs-data.sh" "$MODPATH"
+chmod 0755 "$MODPATH/post-fs-data.sh"
+
 ui_print "- Extracting libgadget.config.so & script.js"
-extract "$ZIPFILE" "libgadget.config.so" "$TMP_MODULE_DIR" true
-extract "$ZIPFILE" "script.js" "$TMP_MODULE_DIR" true
+if [ ! -f "$TMP_MODULE_DIR/libgadget.config.so" ]; then
+  extract "$ZIPFILE" "libgadget.config.so" "$TMP_MODULE_DIR" true
+else
+  ui_print "- Keeping existing libgadget.config.so"
+fi
+if [ ! -f "$TMP_MODULE_DIR/script.js" ]; then
+  extract "$ZIPFILE" "script.js" "$TMP_MODULE_DIR" true
+else
+  ui_print "- Keeping existing script.js"
+fi
 extract "$ZIPFILE" "libgadget.config.so" "$MODPATH"      true
 extract "$ZIPFILE" "script.js" "$MODPATH"      true
 
 ui_print "- Adjusting directory permissions to 0777 (shell:shell)"
 set_perm_recursive "$TMP_MODULE_DIR" 2000 2000 0777 0777
 set_perm_recursive "$MODPATH" 0 0 0755 0644
+
+# Magisk/APatch execute the boot scripts through sh, but do not bet on it.
+chmod 0755 "$MODPATH/post-fs-data.sh"
 
 
 

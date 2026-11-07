@@ -1,0 +1,13 @@
+{
+  "targets": [
+    {
+      "app_name": "com.netshort.abroad",
+      "enabled": true,
+      "start_up_delay_ms": 2000,
+      "injected_libraries": [
+        { "path": "/data/user/0/com.netshort.abroad/libgadget.so" }
+      ],
+      "child_gating": { "enabled": false, "mode": "freeze" }
+    }
+  ]
+}

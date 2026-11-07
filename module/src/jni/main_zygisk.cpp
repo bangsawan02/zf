@@ -271,7 +271,8 @@ static bool copy_config_and_rewrite(const char *src, const char *dst, const char
     return success;
 }
 
-static void localize_single_lib(const char *lib_path, const char *app_data_dir, int uid, int gid) {
+static void localize_single_lib(const char *lib_path, const char *app_data_dir, int uid, int gid,
+                                const struct target_config *cfg) {
     if (strncmp(lib_path, ZF_LOCAL_PREFIX_SLASH, strlen(ZF_LOCAL_PREFIX_SLASH)) != 0) {
         return;
     }
@@ -337,6 +338,15 @@ static void localize_single_lib(const char *lib_path, const char *app_data_dir, 
                             chown(config_dests[i], uid, gid);
                             chmod(config_dests[i], 0644);
                             LOGI("Provisoned config: %s -> %s", config_src, config_dests[i]);
+                        }
+                    }
+
+                    // Hot reload only makes sense in script interaction mode;
+                    // config_rewrite_for_hot_reload is a no-op otherwise.
+                    if (cfg != NULL && cfg->hot_reload) {
+                        for (int i = 0; i < 3; i++) {
+                            config_rewrite_for_hot_reload(config_dests[i], localized_dir,
+                                                          cfg->reload_interval_ms, uid, gid);
                         }
                     }
                 } else {
@@ -490,13 +500,13 @@ class MyModule : public zygisk::ModuleBase {
             }
 
             for (int i = 0; i < cfg.injected_libraries_count; i++) {
-                localize_single_lib(cfg.injected_libraries[i], this->app_data_dir, uid, gid);
+                localize_single_lib(cfg.injected_libraries[i], this->app_data_dir, uid, gid, &cfg);
             }
 
             if (cfg.child_gating.enabled) {
                 for (int i = 0; i < cfg.child_gating.injected_libraries_count; i++) {
                     localize_single_lib(cfg.child_gating.injected_libraries[i],
-                                        this->app_data_dir, uid, gid);
+                                        this->app_data_dir, uid, gid, &cfg);
                 }
             }
         }

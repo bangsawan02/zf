@@ -14,6 +14,15 @@ more stealthy way.
 - The process is not being ptraced like it is with frida-server. Avoiding ptrace based detection.
 - Control about the injection time of the gadget.
 - Allows you to load multiple arbitrary libraries into the process.
+- **Post-injection stealth (opt-in)**: remaps the payload out of `/proc/self/maps`,
+  unlinks it from disk and renames Frida's worker threads. Off by default — it is a
+  per-target decision, not a default, because remapping a live gadget is fatal on
+  some hardened apps.
+- **Hot reload**: edit `script.js`, push it with `zfctl reload`, and the running
+  process re-evaluates it without a restart.
+- **Multi-target config v2**: one `config.json` for many apps, with `defaults`,
+  named `profiles`, profile inheritance (`extends`), wildcard package patterns
+  and an `exclude` denylist.
 
 This repo also provides a [Riru](https://github.com/RikkaApps/Riru) flavor in case you are still
 using riru with an older magisk version rather than zygisk.
@@ -26,11 +35,21 @@ This fork is built and deployed entirely from a phone. See
 | Doc | Covers |
 |---|---|
 | [`docs/ONYXZYGISK.md`](docs/ONYXZYGISK.md) | OnyxZygisk runtime, start/stop without reboot, debugging |
+| [`docs/multi_target.md`](docs/multi_target.md) | one `config.json` for many apps (v2) |
+| [`docs/stealth_and_hotreload.md`](docs/stealth_and_hotreload.md) | memory cloaking + script hot reload |
 | [`docs/advanced_config.md`](docs/advanced_config.md) | `config.json` reference |
 | [`docs/simple_config.md`](docs/simple_config.md) | `target_packages` reference |
 | [`docs/onyx.sh`](docs/onyx.sh) | `start` / `stop` / `restart` / `status` / `install` helper |
 | [`docs/attach.py`](docs/attach.py) | attach to a gadget listener and run a script |
 | [`docs/fix_layout.sh`](docs/fix_layout.sh) | lay out the OnyxZygisk release zip correctly |
+
+`tools/zfctl` edits the multi-target config without touching JSON by hand:
+
+```sh
+./tools/zfctl add com.example.app --profile hook --delay 3000
+./tools/zfctl list
+./tools/zfctl reload com.example.app   # hot reload, needs root
+```
 
 Quick start:
 

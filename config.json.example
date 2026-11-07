@@ -1,23 +1,38 @@
 {
-    "targets": [
-        {
-            "app_name" : "com.example.package",
-            "enabled": true,
-            "start_up_delay_ms": 0,
-            "injected_libraries": [
-                {
-                    "path": "/data/local/tmp/re.zyg.fri/libgadget.so"
-                }
-            ],
-            "child_gating": {
-                "enabled": false,
-                "mode": "freeze",
-                "injected_libraries" : [
-                    {
-                        "path": "/data/local/tmp/re.zyg.fri/libgadget-child.so"
-                    }
-                ]
-            }
-        }
-    ]
+  "version": 2,
+  "exclude": [
+    "com.android.*",
+    "com.google.android.*"
+  ],
+  "defaults": {
+    "enabled": true,
+    "start_up_delay_ms": 0,
+    "injected_libraries": [
+      { "path": "/data/local/tmp/re.zyg.fri/libgadget.so" }
+    ],
+    "hot_reload": true,
+    "reload_interval_ms": 1500,
+    "stealth": {
+      "enabled": true,
+      "remap": true,
+      "rename_threads": true,
+      "unlink_payload": true,
+      "remap_delay_ms": 750,
+      "thread_alias": "Jit thread pool"
+    }
+  },
+  "profiles": {
+    "hook": {},
+    "stealth-off": {
+      "stealth": { "enabled": false }
+    },
+    "kill-children": {
+      "child_gating": { "enabled": true, "mode": "kill" }
+    }
+  },
+  "targets": {
+    "com.example.app": "hook",
+    "com.example.family.*": "kill-children",
+    "com.example.debug": true
+  }
 }

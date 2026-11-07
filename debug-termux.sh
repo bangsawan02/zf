@@ -77,6 +77,7 @@ cmd_inject() {
         name="$(su -c "cat /proc/$pid/cmdline 2>/dev/null | tr '\\0' ' '")"
         echo "  pid=$pid  $name"
     done
+    echo "  (empty = no gadget, or the payload is cloaked by stealth.remap)"
 }
 
 cmd_attach() {

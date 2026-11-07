@@ -17,6 +17,12 @@ if [ ! -d "$TMP_MODULE_DIR" ]; then
     fi
 fi
 
+# The live config is the only thing the module cannot regenerate by itself.
+# Restore it from the module directory when /data/local/tmp was cleared.
+if [ ! -f "$TMP_MODULE_DIR/config.json" ] && [ -f "$MODDIR/config.json" ]; then
+    cp "$MODDIR/config.json" "$TMP_MODULE_DIR/config.json"
+fi
+
 if [ -d "$TMP_MODULE_DIR" ]; then
     chown -R 2000:2000 "$TMP_MODULE_DIR" # shell:shell
     chmod -R 0777 "$TMP_MODULE_DIR"

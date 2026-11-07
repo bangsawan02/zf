@@ -14,7 +14,7 @@
 #include "config.h"
 #include "log.h"
 #include "child_gating.h"
-#include "xdl.h"
+#include "stealth.h"
 
 // No C++ containers / threads / streams here on purpose: the module is
 // preloaded by Zygisk's builtin linker, which cannot resolve libc++ symbols.
@@ -108,41 +108,44 @@ static void delay_start_up(uint64_t start_up_delay_ms) {
     }
 }
 
-void inject_lib(const char *lib_path, const char *log_context) {
+int inject_lib(const char *lib_path, const char *log_context) {
     if (log_context == NULL) {
         log_context = "";
     }
 
-    void *handle = xdl_open(lib_path, XDL_TRY_FORCE_LOAD);
-    if (handle != NULL) {
-        LOGI("%sInjected %s with handle %p", log_context, lib_path, handle);
-        return;
-    }
-
-    const char *xdl_err = dlerror();
-    const char *xdl_error_msg = xdl_err != NULL ? xdl_err : "No direct system link error registered";
-
-    handle = dlopen(lib_path, RTLD_NOW);
+    // dlopen only. The xdl_open fallback is deliberately gone: inside hardened
+    // apps (SecShell/Tencent and friends) its manual relinking leaves the
+    // payload running on a broken thread context. Measured on-device:
+    //   si_addr=<unmapped> si_code=1/2
+    //   pc/lr/sp = 0000... -> (not mapped)
+    // i.e. a SIGSEGV from a garbage PC/SP, not a linker deadlock. bionic's own
+    // linker (dlopen) builds the TLS/thread state correctly, so it is the only
+    // path this module is allowed to use. No remap, no fallback, no corpse.
+    void *handle = dlopen(lib_path, RTLD_NOW);
     if (handle != NULL) {
         LOGI("%sInjected %s with handle %p (dlopen)", log_context, lib_path, handle);
-        return;
+        return 1;
     }
 
     const char *dl_err = dlerror();
-    const char *dl_error_msg = dl_err != NULL ? dl_err : "No standard linking error registered";
+    LOGE("%sFailed to inject %s (dlopen): %s", log_context, lib_path,
+         dl_err != NULL ? dl_err : "No standard linking error registered");
 
-    LOGE("%sFailed to inject %s (xdl_open): %s", log_context, lib_path, xdl_error_msg);
-    LOGE("%sFailed to inject %s (dlopen): %s", log_context, lib_path, dl_error_msg);
-
-    // Check if file is readable
     if (access(lib_path, R_OK) != 0) {
         LOGE("%sInjection failed: File is not readable or does not exist: %s (Errno: %d)",
              log_context, lib_path, errno);
     }
+    return 0;
 }
 
+struct inject_context {
+    struct target_config cfg;
+    char app_data_dir[ZF_MAX_PATH * 2];
+};
+
 static void *inject_libs_thread(void *arg) {
-    struct target_config *cfg = (struct target_config *) arg;
+    struct inject_context *ctx = (struct inject_context *) arg;
+    struct target_config *cfg = &ctx->cfg;
 
     // We need to wait for process initialization to complete.
     // Loading the gadget before that will freeze the process
@@ -156,12 +159,30 @@ static void *inject_libs_thread(void *arg) {
 
     delay_start_up(cfg->start_up_delay_ms);
 
+    int loaded = 0;
     for (int i = 0; i < cfg->injected_libraries_count; i++) {
         LOGI("Injecting %s", cfg->injected_libraries[i]);
-        inject_lib(cfg->injected_libraries[i], "");
+        if (inject_lib(cfg->injected_libraries[i], "")) {
+            if (loaded != i) {
+                copy_str_local(cfg->injected_libraries[loaded], ZF_MAX_PATH,
+                               cfg->injected_libraries[i]);
+            }
+            loaded++;
+        }
+    }
+    cfg->injected_libraries_count = loaded;
+
+    if (loaded == 0) {
+        LOGW("No library could be injected; skipping stealth pass");
+        free(ctx);
+        return NULL;
     }
 
-    free(cfg);
+    // Cloak the payload only after it finished initializing: remapping the
+    // gadget's code while its constructor is still running would crash.
+    stealth_apply(cfg, ctx->app_data_dir);
+
+    free(ctx);
     return NULL;
 }
 
@@ -242,12 +263,13 @@ int check_and_inject(const char *app_name, const char *app_data_dir) {
         }
     }
 
-    struct target_config *thread_cfg = (struct target_config *) malloc(sizeof(*thread_cfg));
+    struct inject_context *thread_cfg = (struct inject_context *) malloc(sizeof(*thread_cfg));
     if (thread_cfg == NULL) {
         LOGE("Failed to allocate injection thread context");
         return 0;
     }
-    *thread_cfg = cfg;
+    thread_cfg->cfg = cfg;
+    copy_str_local(thread_cfg->app_data_dir, sizeof(thread_cfg->app_data_dir), app_data_dir);
 
     pthread_attr_t attr;
     pthread_attr_init(&attr);

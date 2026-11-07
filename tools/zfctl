@@ -1,0 +1,366 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""zfctl - manage ZygiskFrida multi-target config from Termux.
+
+No external dependencies: only the Python standard library.
+
+Examples
+--------
+    ./tools/zfctl show
+    ./tools/zfctl add com.example.app --profile hook --delay 3000
+    ./tools/zfctl add 'com.bank.*' --no-stealth
+    ./tools/zfctl list
+    ./tools/zfctl rm com.example.app
+    ./tools/zfctl reload com.example.app     # hot-reload script.js (needs root)
+    ./tools/zfctl validate
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+
+MODULE_DIR = os.environ.get("ZYGISKFRIDA_DIR", "/data/local/tmp/re.zyg.fri")
+CONFIG_PATH = os.path.join(MODULE_DIR, "config.json")
+GADGET_PATH = os.path.join(MODULE_DIR, "libgadget.so")
+
+DEFAULT_CONFIG = {
+    "version": 2,
+    "defaults": {
+        "enabled": True,
+        "start_up_delay_ms": 0,
+        "injected_libraries": [{"path": os.path.join(MODULE_DIR, "libgadget.so")}],
+        "hot_reload": True,
+        "reload_interval_ms": 1500,
+        "stealth": {
+            "enabled": True,
+            "remap": True,
+            "rename_threads": True,
+            "unlink_payload": True,
+            "remap_delay_ms": 750,
+        },
+    },
+    "profiles": {
+        "hook": {},
+        "kill": {"child_gating": {"enabled": True, "mode": "kill"}},
+        "freeze": {"child_gating": {"enabled": True, "mode": "freeze"}},
+    },
+    "targets": [],
+}
+
+
+def die(message):
+    print("error: " + message, file=sys.stderr)
+    sys.exit(1)
+
+
+def load_config(create=False):
+    if not os.path.exists(CONFIG_PATH):
+        if not create:
+            die("config not found: " + CONFIG_PATH)
+        return json.loads(json.dumps(DEFAULT_CONFIG))
+    with open(CONFIG_PATH, "r", encoding="utf-8") as handle:
+        try:
+            return json.load(handle)
+        except json.JSONDecodeError as exc:
+            die("invalid JSON in {}: {}".format(CONFIG_PATH, exc))
+
+
+def save_config(config):
+    if not os.path.isdir(MODULE_DIR):
+        die("module dir missing: " + MODULE_DIR)
+    tmp = CONFIG_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(config, handle, indent=2, ensure_ascii=False)
+        handle.write("\n")
+    os.replace(tmp, CONFIG_PATH)
+    os.chmod(CONFIG_PATH, 0o644)
+    print("wrote " + CONFIG_PATH)
+
+
+def as_target_list(config):
+    """Return targets as a list of dictionaries, preserving order."""
+    targets = config.get("targets", [])
+    if isinstance(targets, list):
+        result = []
+        for entry in targets:
+            if isinstance(entry, str):
+                result.append({"app_name": entry})
+            elif isinstance(entry, dict):
+                result.append(entry)
+            else:
+                die("unsupported target entry: {!r}".format(entry))
+        return result
+    if isinstance(targets, dict):
+        result = []
+        for name, value in targets.items():
+            if isinstance(value, str):
+                result.append({"app_name": name, "profile": value})
+            elif isinstance(value, bool):
+                result.append({"app_name": name, "enabled": value})
+            elif isinstance(value, dict):
+                entry = {"app_name": name}
+                entry.update(value)
+                result.append(entry)
+            else:
+                die("unsupported target value for {!r}".format(name))
+        return result
+    die("'targets' must be an array or an object")
+
+
+def store_target_list(config, targets):
+    config["version"] = 2
+    config["targets"] = targets
+
+
+def target_patterns(entry):
+    name = entry.get("app_name")
+    if isinstance(name, str):
+        return [name]
+    if isinstance(name, list):
+        return [item for item in name if isinstance(item, str)]
+    return []
+
+
+def cmd_show(args):
+    config = load_config()
+    print(json.dumps(config, indent=2, ensure_ascii=False))
+
+
+def cmd_list(args):
+    config = load_config()
+    targets = as_target_list(config)
+    if not targets:
+        print("(no targets configured)")
+        return
+    print("{:<40} {:<10} {:>8}  {}".format("package pattern", "profile", "delay", "flags"))
+    print("-" * 78)
+    for entry in targets:
+        profile = entry.get("profile", "-")
+        delay = entry.get("start_up_delay_ms", "-")
+        flags = []
+        if entry.get("enabled") is False:
+            flags.append("disabled")
+        stealth = entry.get("stealth")
+        if isinstance(stealth, dict) and stealth.get("enabled") is False:
+            flags.append("stealth:off")
+        if entry.get("hot_reload") is False:
+            flags.append("hotreload:off")
+        for pattern in target_patterns(entry):
+            print("{:<40} {:<10} {:>8}  {}".format(pattern, profile, delay, ",".join(flags) or "-"))
+
+
+def cmd_add(args):
+    config = load_config(create=True)
+    targets = as_target_list(config)
+
+    for entry in targets:
+        if args.package in target_patterns(entry):
+            die("target already exists: " + args.package)
+
+    entry = {"app_name": args.package, "enabled": True}
+    if args.profile:
+        entry["profile"] = args.profile
+    if args.delay is not None:
+        entry["start_up_delay_ms"] = args.delay
+    if args.no_stealth:
+        entry["stealth"] = {"enabled": False}
+    if args.no_hot_reload:
+        entry["hot_reload"] = False
+    if args.gadget:
+        entry["injected_libraries"] = [{"path": args.gadget}]
+
+    targets.append(entry)
+    store_target_list(config, targets)
+    save_config(config)
+    print("added " + args.package)
+
+
+def cmd_rm(args):
+    config = load_config()
+    targets = as_target_list(config)
+    kept = []
+    removed = 0
+    for entry in targets:
+        if args.package in target_patterns(entry):
+            removed += 1
+            continue
+        kept.append(entry)
+    if removed == 0:
+        die("no such target: " + args.package)
+    store_target_list(config, kept)
+    save_config(config)
+    print("removed {} target(s)".format(removed))
+
+
+def cmd_set(args):
+    if "=" not in args.assignment:
+        die("expected KEY=VALUE, e.g. start_up_delay_ms=3000")
+    key, raw = args.assignment.split("=", 1)
+
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        value = raw
+
+    config = load_config()
+    targets = as_target_list(config)
+    touched = 0
+    for entry in targets:
+        if args.package in target_patterns(entry):
+            entry[key] = value
+            touched += 1
+    if touched == 0:
+        die("no such target: " + args.package)
+    store_target_list(config, targets)
+    save_config(config)
+    print("updated {} target(s): {}={}".format(touched, key, value))
+
+
+def cmd_validate(args):
+    config = load_config()
+    problems = []
+    warnings = []
+
+    if config.get("version") is not None and config.get("version") != 2:
+        warnings.append("version is {}, only 2 is understood".format(config.get("version")))
+
+    targets = as_target_list(config)
+    seen = {}
+    for entry in targets:
+        patterns = target_patterns(entry)
+        if not patterns:
+            problems.append("target without app_name: {!r}".format(entry))
+        for pattern in patterns:
+            if pattern in seen:
+                warnings.append("duplicate pattern: " + pattern)
+            seen[pattern] = True
+        profile = entry.get("profile")
+        if profile is not None:
+            profiles = config.get("profiles", {})
+            if not isinstance(profiles, dict) or profile not in profiles:
+                problems.append("unknown profile {!r} for {!r}".format(profile, patterns))
+
+    if not os.path.exists(GADGET_PATH):
+        warnings.append("gadget not found: " + GADGET_PATH)
+
+    for line in warnings:
+        print("warning: " + line)
+    for line in problems:
+        print("error: " + line)
+
+    if problems:
+        sys.exit(1)
+    print("config OK ({} target entries)".format(len(targets)))
+
+
+def run_root(command):
+    return subprocess.run(["su", "-c", command], capture_output=True, text=True)
+
+
+def app_uid(package):
+    result = run_root("stat -c %u /data/data/" + package)
+    if result.returncode != 0 or not result.stdout.strip().isdigit():
+        return None
+    return int(result.stdout.strip())
+
+
+def cmd_reload(args):
+    config = load_config()
+    packages = list(args.packages)
+
+    if not packages:
+        for entry in as_target_list(config):
+            for pattern in target_patterns(entry):
+                if "*" in pattern or "?" in pattern:
+                    print("skip wildcard (pass the package explicitly): " + pattern)
+                    continue
+                packages.append(pattern)
+
+    if not packages:
+        die("nothing to reload")
+
+    source = os.path.join(MODULE_DIR, "script.js")
+    if not os.path.exists(source):
+        die("script not found: " + source)
+
+    for package in packages:
+        uid = app_uid(package)
+        if uid is None:
+            print("warning: cannot resolve app data dir for " + package, file=sys.stderr)
+            continue
+
+        dest_dir = "/data/data/{}/.zygisk_frida".format(package)
+        dest = dest_dir + "/script.js"
+        command = (
+            "mkdir -p {dir} && cp {src} {dst} && chown {uid}:{uid} {dir} {dst} "
+            "&& chmod 755 {dir} && chmod 644 {dst}"
+        ).format(dir=dest_dir, src=source, dst=dest, uid=uid)
+        result = run_root(command)
+        if result.returncode != 0:
+            print("error: {}\n{}".format(package, result.stderr.strip()), file=sys.stderr)
+        else:
+            print("reloaded script for {pkg} -> {dst}".format(pkg=package, dst=dest))
+
+
+def cmd_status(args):
+    print("module dir : " + MODULE_DIR)
+    print("config     : " + CONFIG_PATH + (" (exists)" if os.path.exists(CONFIG_PATH) else " (missing)"))
+    print("gadget     : " + GADGET_PATH + (" (exists)" if os.path.exists(GADGET_PATH) else " (missing)"))
+    if os.path.exists(GADGET_PATH):
+        stat = os.stat(GADGET_PATH)
+        print("gadget size: {} bytes, mtime {}".format(stat.st_size, int(stat.st_mtime)))
+    try:
+        result = subprocess.run(["frida", "--version"], capture_output=True, text=True)
+        print("frida host : " + result.stdout.strip())
+    except FileNotFoundError:
+        print("frida host : not installed")
+    if os.path.exists(CONFIG_PATH):
+        config = load_config()
+        targets = as_target_list(config)
+        print("targets    : {}".format(len(targets)))
+        for entry in targets:
+            for pattern in target_patterns(entry):
+                print("  - " + pattern)
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="zfctl", description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("show", help="print config.json").set_defaults(func=cmd_show)
+
+    sub.add_parser("list", help="list configured targets").set_defaults(func=cmd_list)
+
+    add = sub.add_parser("add", help="add a target")
+    add.add_argument("package")
+    add.add_argument("--profile")
+    add.add_argument("--delay", type=int)
+    add.add_argument("--gadget")
+    add.add_argument("--no-stealth", action="store_true")
+    add.add_argument("--no-hot-reload", action="store_true")
+    add.set_defaults(func=cmd_add)
+
+    rm = sub.add_parser("rm", help="remove a target")
+    rm.add_argument("package")
+    rm.set_defaults(func=cmd_rm)
+
+    set_cmd = sub.add_parser("set", help="set a field on a target (KEY=VALUE)")
+    set_cmd.add_argument("package")
+    set_cmd.add_argument("assignment")
+    set_cmd.set_defaults(func=cmd_set)
+
+    sub.add_parser("validate", help="validate config.json").set_defaults(func=cmd_validate)
+
+    reload_cmd = sub.add_parser("reload", help="hot-reload script.js into running apps")
+    reload_cmd.add_argument("packages", nargs="*")
+    reload_cmd.set_defaults(func=cmd_reload)
+
+    sub.add_parser("status", help="show versions and paths").set_defaults(func=cmd_status)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
